@@ -42,63 +42,71 @@ Two things worth knowing before you pick numbers:
   a **miss**.
 
 ---
-## 1.
+## 1. No human writing gets the AI label
 
-<!-- Your criterion. It must name a number. -->
+Of 10 pieces of writing I know a person wrote (my own writing plus pre-2020
+published prose, including at least 3 written plainly), **0** get the
+high-confidence AI label, in every one of the 3 trials.
 
-
-
-**Why this target:**
-
-
-
----
-
-## 2.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** The AI label is the one that accuses somebody. The unsure
+band exists so the system has somewhere to put its doubt, so known-human text
+should land there at worst. On a writing site a wrong accusation costs the
+writer a lot more than a missed detection costs the site, and "1 in 10" would
+mean accepting that every tenth honest writer gets accused.
 
 ---
 
-## 3.
+## 2. AI and human text score clearly apart
 
-<!-- Your criterion. -->
+Across 5 texts I'm confident are AI-generated and 5 I'm confident are
+human-written, the average `confidence` of the AI group is at least **0.40**
+higher than the average of the human group, in every trial.
 
-
-
-**Why this target:**
-
-
-
----
-
-## 4.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** If the two groups sit closer than that, the unsure band
+(0.35 to 0.70, which is 0.35 wide) swallows both of them and the labels stop
+meaning anything. My calibration run had a gap of about 0.41 to 0.65, so 0.40
+is reachable but not guaranteed.
 
 ---
 
-## 5.
+## 3. All three labels are reachable
 
-<!-- Your criterion. -->
+A set of 6 inputs spread across the range (clearly AI, edited AI, formal human,
+plain human, casual human, borderline) produces **each of the three labels at
+least once** in every trial. Also, every score from 0.00 to 1.00 in steps of
+0.01 maps to exactly one label (checked by a unit test).
 
+**Why this target:** A label nobody can get is a gap in the ranges, and a
+gap means some score has no sentence to show. Checking the full 0-1 sweep
+catches gaps in the code; checking real inputs catches labels that exist on
+paper but that my signals never actually produce.
 
+---
 
-**Why this target:**
+## 4. Every appeal changes status and gets recorded
 
+**10 of 10** appeals against real `content_id`s return 200 with status
+`under_review`, each adds exactly one `appeal` entry to the audit log, and the
+original decision entry is still there unchanged afterwards. An appeal against
+a made-up id returns 404 and writes no appeal entry.
 
+**Why this target:** The appeal is the only thing between a wrong accusation
+and nothing at all, so "most of the time" isn't good enough here. And an appeal
+that overwrites the original decision would destroy the evidence the reviewer
+needs.
+
+---
+
+## 5. Bad input never crashes the service
+
+Each of these 7 request bodies returns a **4xx JSON error, never a 500**, and
+leaves exactly one `rejected` entry in the audit log: empty text,
+text that is only spaces, no `text` field, `text: null`, `text` as a number, a 50,000-word
+text, and no `creator_id`.
+
+**Why this target:** A crash on malformed input is one of the most common real
+failures there is, and a request that crashes leaves no trace in the log. An
+attack that shows up only as an absence is one I'd never find.
 
 ---
 
