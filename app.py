@@ -30,8 +30,39 @@ from flask import Flask, jsonify, request
 
 import audit
 import config
+import detector
+import scoring
+import stylometry
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = config.MAX_REQUEST_BYTES
+
+
+def _creator_for_log(creator_id) -> str:
+    """A creator_id safe to write into a rejection, whatever the caller sent."""
+    if isinstance(creator_id, str) and creator_id.strip():
+        return creator_id.strip()[:config.MAX_CREATOR_ID_CHARS]
+    return "unknown"
+
+
+def _reject(status: int, code: str, message: str, creator_id: str = "unknown", **extra):
+    """
+    Refuse a request: log it, then answer with the shared error shape.
+
+    ⚠️ Never pass `content_id` in `extra`. `audit.entries_for` matches on that
+    key, so a rejection carrying a made-up id would make the id look real to
+    `/appeal`. Use `requested_content_id` instead.
+    """
+    audit.log_rejection(creator_id=creator_id, reason=code, **extra)
+    return jsonify({"error": code, "message": message}), status
+
+
+@app.errorhandler(413)
+def body_too_large(exc):
+    """A body over MAX_REQUEST_BYTES never reaches a route; it still gets logged."""
+    return _reject(413, "text_too_long",
+                   f"Request body can be at most {config.MAX_REQUEST_BYTES:,} bytes.",
+                   route=request.path)
 
 
 # ── Rate limiting — UNIT 8 ────────────────────────────────────────────────────
@@ -198,18 +229,80 @@ def submit():
     Worth deciding early, because unit 8's attack set will decide it for you:
     what should this do when `text` is missing, empty, or enormous? A crash on
     a malformed input is one of the most common real failures there is.
-    """
-    payload = request.get_json(silent=True) or {}
 
-    # TODO: delete this and build the route.
+    My answer: every bad input gets a 4xx with a JSON error AND a `rejected`
+    entry in the audit log. The contract is in the README under What This Does.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _reject(400, "invalid_json",
+                       'Send a JSON object with "text" and "creator_id".',
+                       route="submit")
+
+    creator_id = payload.get("creator_id")
+    creator_for_log = _creator_for_log(creator_id)
+    text = payload.get("text")
+
+    if not isinstance(text, str) or not text.strip():
+        return _reject(400, "invalid_text",
+                       '"text" must be a non-empty string.',
+                       creator_for_log, route="submit")
+    if len(text) > config.MAX_TEXT_CHARS:
+        return _reject(413, "text_too_long",
+                       f"Text can be at most {config.MAX_TEXT_CHARS:,} characters.",
+                       creator_for_log, route="submit", text_length=len(text))
+    word_count = len(stylometry.words(text))
+    if word_count < config.MIN_WORDS:
+        return _reject(400, "text_too_short",
+                       f"Text needs at least {config.MIN_WORDS} words to be checked.",
+                       creator_for_log, route="submit", word_count=word_count)
+    if (not isinstance(creator_id, str) or not creator_id.strip()
+            or len(creator_id.strip()) > config.MAX_CREATOR_ID_CHARS):
+        return _reject(400, "invalid_creator_id",
+                       f'"creator_id" must be a non-empty string of at most '
+                       f"{config.MAX_CREATOR_ID_CHARS} characters.",
+                       creator_for_log, route="submit")
+    creator_id = creator_id.strip()
+
+    try:
+        model_score = detector.model_signal(text)
+    except detector.DetectorUnavailable:
+        return _reject(503, "detector_unavailable",
+                       "The checking model isn't available right now. Try again later.",
+                       creator_id, route="submit")
+    except ValueError:
+        # The detector refuses text under 3 tokens. MIN_WORDS should stop that
+        # first, but the detector's own rule is the one that counts.
+        return _reject(400, "text_too_short",
+                       f"Text needs at least {config.MIN_WORDS} words to be checked.",
+                       creator_id, route="submit", word_count=word_count)
+
+    style_score = round(stylometry.style_signal(text), 4)
+    confidence = round(scoring.combine_signals(model_score, style_score), 4)
+    guess, label = scoring.score_to_label(confidence)
+    content_id = str(uuid.uuid4())
+
+    audit.log_decision(
+        content_id=content_id,
+        creator_id=creator_id,
+        guess=guess,
+        model_score=model_score,
+        style_score=style_score,
+        combined_score=confidence,
+        label=label,
+        status="decided",
+        word_count=word_count,
+    )
     return jsonify({
-        "error": "not_implemented",
-        "message": "POST /submit isn't built yet — see the TODO in app.py.",
-        "you_sent": {
-            "text_length": len(payload.get("text", "")),
-            "creator_id": payload.get("creator_id"),
-        },
-    }), 501
+        "content_id": content_id,
+        "creator_id": creator_id,
+        "guess": guess,
+        "confidence": confidence,
+        "label": label,
+        "model_score": model_score,
+        "style_score": style_score,
+        "status": "decided",
+    })
 
 
 @app.post("/appeal")

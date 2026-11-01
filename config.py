@@ -47,6 +47,23 @@ DETECTOR_MODEL = os.getenv("AI201_DETECTOR_MODEL", "gpt2")
 DETECTOR_MAX_TOKENS = 400
 
 
+# ─── Input limits ────────────────────────────────────────────────────────────
+# Anything outside these gets a 4xx and a `rejected` entry in the audit log.
+#
+# MIN_WORDS: below ~20 words perplexity swings wildly and there are too few
+# sentences for a spread, so any label would be a guess. Saying "too short to
+# check" is more honest than labelling it.
+# MAX_TEXT_CHARS: about 3,500 words, longer than any single post this is for.
+# The detector only reads the first 400 tokens anyway.
+# MAX_REQUEST_BYTES: refuses a huge body before Flask even parses it.
+
+MIN_WORDS = 20
+MAX_TEXT_CHARS = 20_000
+MAX_CREATOR_ID_CHARS = 100
+MAX_REASONING_CHARS = 5_000
+MAX_REQUEST_BYTES = 1_000_000
+
+
 # ─── Scoring (Milestone 4) ───────────────────────────────────────────────────
 # How much each signal counts toward the combined score.
 #
