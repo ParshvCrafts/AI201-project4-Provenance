@@ -67,12 +67,36 @@ MAX_REQUEST_BYTES = 1_000_000
 # ─── Scoring (Milestone 4) ───────────────────────────────────────────────────
 # How much each signal counts toward the combined score.
 #
-# ⚠️ These are placeholders. Milestone 4 asks you to write your combining rule
-# down BEFORE you code it, and to put the numbers in your README. Whatever you
-# decide, it goes here.
+# My rule (scoring.py::combine_signals, numbers in the README):
+#   1. Equal-weight average. Each signal wrongly suspects a different kind of
+#      human writer (model: plain writing; style: formal writing), so neither
+#      earned more trust in calibration.
+#   2. If the signals sit on opposite sides of 0.5 AND differ by at least
+#      DISAGREEMENT_GAP, the result is held inside the unsure band. Two methods
+#      that disagree that much is uncertainty, not a verdict.
 
 WEIGHT_MODEL_SIGNAL = 0.5
 WEIGHT_STYLE_SIGNAL = 0.5
+DISAGREEMENT_GAP = 0.4
+
+
+# ─── The style signal (stylometry.py::style_signal) ─────────────────────────
+# Each measure is mapped linearly onto 0-1 (1 = AI-like) between two anchors,
+# then clamped. The anchors are rounded from calibrate.py's run: AI samples had
+# sentence spread 0.14-0.22 and vocabulary 0.88-0.90; human samples had spread
+# 0.27-0.72 and vocabulary 0.71-0.83. Six texts is a small sample, so these are
+# a starting point that unit 8 is meant to test, not a fitted model.
+
+SPREAD_AI = 0.15       # spread at or below this scores 1.0
+SPREAD_HUMAN = 0.60    # spread at or above this scores 0.0
+VOCAB_HUMAN = 0.72     # moving-average TTR at or below this scores 0.0
+VOCAB_AI = 0.90        # at or above this scores 1.0
+
+# Spread separated AI from human best, so it leads. Punctuation density is
+# computed and printed but not weighted: in calibration it didn't separate the
+# two at all (AI 0.08-0.10, human 0.04-0.13), so it would only add noise.
+STYLE_WEIGHT_SPREAD = 0.6
+STYLE_WEIGHT_VOCAB = 0.4
 
 
 # ─── Thresholds (Milestone 5) ────────────────────────────────────────────────
@@ -88,8 +112,13 @@ WEIGHT_STYLE_SIGNAL = 0.5
 # getting through. There is no setting that avoids the trade — only settings
 # that decide who pays for it.
 
+# Asymmetric on purpose. A wrong "AI" label accuses a writer; a wrong "human"
+# label lets some AI text through. So the AI label needs 0.70, which leaves
+# formal human writing (0.56 in calibration) real headroom, while edited AI
+# (0.76) is still caught. Both boundaries belong to "unsure".
+
 HUMAN_THRESHOLD = 0.35
-AI_THRESHOLD = 0.65
+AI_THRESHOLD = 0.70
 
 # ⚠️ One thing that catches people out in Milestone 5. A weighted average can
 # only land between its two inputs — so while `style_signal` is still the stub

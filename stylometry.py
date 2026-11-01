@@ -33,6 +33,16 @@ anything together:
 import re
 import statistics
 
+import config
+
+# Window size for the moving-average type-token ratio.
+TTR_WINDOW = 50
+
+# Punctuation that counts toward density: , ; : ( ) ! ? … and dashes. A dash is
+# an em/en dash, a double hyphen, or a hyphen with a space on either side; a
+# hyphen inside a word ("well-known") is not punctuation in this sense.
+_PUNCT = re.compile(r"\.\.\.|…|--|[—–]|\s-\s|[,;:()!?]")
+
 
 def sentences(text: str) -> list[str]:
     """Split into sentences. Rough and good enough — given to you."""
@@ -63,9 +73,17 @@ def sentence_length_spread(text: str) -> float:
     Watch the edge case: a one-sentence submission has no spread at all, and
     `stdev` raises on fewer than two values. Decide what that should return
     before the attack set decides for you.
+
+    My version: coefficient of variation (stdev / mean) of words per sentence.
+    0.0 means every sentence is the same length; higher means lumpier, which
+    points toward human. Fewer than two sentences returns 0.0, and
+    `style_signal` treats that case as "can't tell" instead of "AI".
     """
-    # TODO: replace this
-    return 0.0
+    lengths = [len(words(s)) for s in sentences(text)]
+    lengths = [n for n in lengths if n > 0]
+    if len(lengths) < 2:
+        return 0.0
+    return statistics.stdev(lengths) / statistics.mean(lengths)
 
 
 def type_token_ratio(text: str) -> float:
@@ -79,9 +97,22 @@ def type_token_ratio(text: str) -> float:
     longer, because common words repeat. Two texts of different lengths aren't
     directly comparable on it, and if your test inputs vary a lot in length,
     that alone can look like a signal.
+
+    My version: the moving-average TTR (MATTR, Covington & McFall 2010). It
+    takes the plain ratio inside every 50-word window and averages them, so a
+    300-word text and a 100-word text land on the same scale. Texts shorter
+    than one window fall back to the plain ratio. No words returns 0.0.
     """
-    # TODO: replace this
-    return 0.0
+    tokens = words(text)
+    if not tokens:
+        return 0.0
+    if len(tokens) <= TTR_WINDOW:
+        return len(set(tokens)) / len(tokens)
+    windows = len(tokens) - TTR_WINDOW + 1
+    total = sum(
+        len(set(tokens[i:i + TTR_WINDOW])) / TTR_WINDOW for i in range(windows)
+    )
+    return total / windows
 
 
 def punctuation_density(text: str) -> float:
@@ -93,9 +124,17 @@ def punctuation_density(text: str) -> float:
         semicolons, dashes — is a real choice. Semicolons and em dashes are
         more interesting than full stops, because they vary more between
         writers.
+
+    My version: marks other than the full stop, per word. Commas, semicolons,
+    colons, dashes, brackets, question marks, exclamation marks and ellipses
+    count. Full stops don't (every text has them) and neither do quote marks
+    or in-word hyphens (those follow the content, not the writer's habits).
+    No words returns 0.0.
     """
-    # TODO: replace this
-    return 0.0
+    tokens = words(text)
+    if not tokens:
+        return 0.0
+    return len(_PUNCT.findall(text)) / len(tokens)
 
 
 # ── Combining them ───────────────────────────────────────────────────────────
@@ -121,9 +160,31 @@ def style_signal(text: str) -> float:
     clearly human, plain conventional human writing, lightly-edited AI — before
     you trust it. Plain and ordinary, not formal: formal prose reads as *human*
     to signal one, and it is plain writing that gets accused.
+
+    My version, with the numbers in config.py:
+      - spread: LOW means AI-like, so it's flipped (SPREAD_HUMAN -> 0, SPREAD_AI -> 1).
+      - vocabulary: HIGH means AI-like in my calibration (the opposite of the
+        hint above), so it isn't flipped (VOCAB_HUMAN -> 0, VOCAB_AI -> 1).
+      - punctuation: not weighted, see config.py.
+    Then 0.6 x spread + 0.4 x vocabulary. A text with fewer than two sentences
+    has no spread to measure, so that part counts as 0.5 ("can't tell"), and a
+    text with no words at all scores 0.5 overall.
     """
-    # TODO: replace this
-    return 0.5
+    if not words(text):
+        return 0.5
+    if len(sentences(text)) < 2:
+        spread_part = 0.5
+    else:
+        spread_part = _scale(sentence_length_spread(text),
+                             config.SPREAD_HUMAN, config.SPREAD_AI)
+    vocab_part = _scale(type_token_ratio(text), config.VOCAB_HUMAN, config.VOCAB_AI)
+    return (config.STYLE_WEIGHT_SPREAD * spread_part
+            + config.STYLE_WEIGHT_VOCAB * vocab_part)
+
+
+def _scale(value: float, zero_at: float, one_at: float) -> float:
+    """Map `value` linearly so `zero_at` -> 0.0 and `one_at` -> 1.0, clamped."""
+    return min(max((value - zero_at) / (one_at - zero_at), 0.0), 1.0)
 
 
 if __name__ == "__main__":
@@ -139,4 +200,4 @@ if __name__ == "__main__":
     print(f"type_token_ratio         {type_token_ratio(text)}")
     print(f"punctuation_density      {punctuation_density(text)}")
     print(f"style_signal             {style_signal(text)}   (higher = more likely AI)")
-    print("\nAll zeros? These are stubs — Milestone 4 is where you build them.")
+    print("\npunctuation_density is shown but not weighted; see config.py.")

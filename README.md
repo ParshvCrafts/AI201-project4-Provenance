@@ -201,17 +201,55 @@ AI-like to it.
 <!-- Write the rule in words, then give the numbers. What happens when the two
      signals disagree? -->
 
-**The rule:**
+**The rule:** Average the two signals with equal weight. But if they land on
+opposite sides of 0.5 and are at least 0.4 apart, hold the result inside the
+unsure band (0.35 to 0.70). I wrote this down before coding it. Equal weights
+because each signal wrongly suspects a different kind of human writer: the
+model signal suspects plain writing and the style signal suspects formal
+writing, so neither earned more trust. The cap is there because a plain average
+can still turn a split into a verdict: model 1.0 and style 0.45 average to
+0.725, which would be an AI label while one method says "human".
 
-**The numbers:**
+**The numbers** (all in `config.py`):
+
+| Setting | Value |
+|---|---|
+| Model weight / style weight | 0.5 / 0.5 |
+| Disagreement gap that triggers the cap | 0.4 |
+| Inside the style signal: spread weight / vocabulary weight / punctuation weight | 0.6 / 0.4 / 0 |
+| Spread anchors (scores 1.0 at or below / 0.0 at or above) | 0.15 / 0.60 |
+| Vocabulary anchors (scores 0.0 at or below / 1.0 at or above) | 0.72 / 0.90 |
+| Label thresholds | human below 0.35, AI above 0.70, both boundaries are unsure |
+| Model signal curve (given, unchanged) | perplexity 45 maps to 0.5, steepness 1.6 |
 
 **Where it lives:** `scoring.py::combine_signals`
 
-<!-- ⚠️ The grader checks your code against that line. If your rule lives
-     somewhere else, say where. -->
+**Calibration run** (`python calibrate.py`, real output). Human texts are
+pre-LLM published prose; AI texts came from a chatbot.
 
-**A case where my two signals split, and what my rule does with it:**
+```
+input                 ppl     model    spread       ttr     punct     style  combined     guess
+clearly_ai           12.8     0.882     0.222     0.885     0.101     0.871    0.8765        ai
+clearly_ai_2         17.0    0.8265     0.143     0.878     0.079    0.9506    0.8886        ai
+clearly_human        50.5    0.4538     0.721     0.711      0.13       0.0    0.2269     human
+plain_human          42.2     0.526     0.494     0.798     0.059    0.3148    0.4204    unsure
+formal_human         50.4    0.4548     0.273     0.829     0.039    0.6782    0.5665    unsure
+edited_ai            22.1    0.7571     0.323       0.9     0.099      0.77    0.7635        ai
+```
 
+Where they agree: both signals call the chatbot paragraphs AI (0.83-0.95) and
+Twain human (model 0.45, style 0.00). Clearly-AI and clearly-human end up about
+0.65 apart.
+
+**A case where my two signals split, and what my rule does with it:** Orwell's
+1946 essay. The model signal reads it as human (0.45, perplexity 50, lots of
+rare words), but the style signal reads it as AI (0.68), because Orwell writes
+long sentences of similar length with varied vocabulary, which is exactly the
+chatbot shape. The gap is 0.22, under the 0.4 cap, so the rule just averages:
+0.57, unsure. That's the right outcome, and it's also the closest call in the
+set. It's 0.13 below the AI line, and that headroom is why the AI threshold is
+0.70 and not the starter's 0.65. Hemingway splits the other way (model 0.53,
+style 0.31) and lands at 0.42, also unsure.
 
 
 ---
