@@ -184,5 +184,119 @@ class SubmitBadInput(RouteTestCase):
         self.assertEqual(response.get_json()["error"], "text_too_short")
 
 
+
+class AppealTestCase(RouteTestCase):
+
+    def appeal(self, body):
+        return self.client.post("/appeal", json=body)
+
+    def appeals(self):
+        return [e for e in audit.read_entries() if e.get("event") == "appeal"]
+
+
+class Appeal(AppealTestCase):
+
+    def test_appeal_moves_to_under_review_and_keeps_the_decision(self):
+        submitted = self.submit().get_json()
+        decision_before = audit.read_entries()[0]
+
+        response = self.appeal({"content_id": submitted["content_id"],
+                                "reasoning": "  I wrote this myself.  "})
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["content_id"], submitted["content_id"])
+        self.assertEqual(body["status"], "under_review")
+        self.assertIsInstance(body["message"], str)
+
+        entries = audit.read_entries()
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0], decision_before)
+        appeal = entries[1]
+        self.assertEqual(appeal["event"], "appeal")
+        self.assertEqual(appeal["status"], "under_review")
+        self.assertEqual(appeal["content_id"], submitted["content_id"])
+        self.assertEqual(appeal["creator_id"], "writer_1")
+        self.assertEqual(appeal["reasoning"], "I wrote this myself.")
+
+    def test_ten_of_ten_appeals_are_recorded(self):
+        # Criterion 4.
+        ids = [self.submit().get_json()["content_id"] for _ in range(10)]
+        for content_id in ids:
+            response = self.appeal({"content_id": content_id, "reasoning": "Mine."})
+            self.assertEqual(response.status_code, 200)
+        appealed = [e["content_id"] for e in self.appeals()]
+        self.assertEqual(sorted(appealed), sorted(ids))
+
+    def test_second_appeal_is_also_recorded(self):
+        content_id = self.submit().get_json()["content_id"]
+        for reasoning in ("First try.", "More detail."):
+            self.assertEqual(self.appeal({"content_id": content_id,
+                                          "reasoning": reasoning}).status_code, 200)
+        self.assertEqual([e["reasoning"] for e in self.appeals()],
+                         ["First try.", "More detail."])
+
+    def test_unknown_id_is_404_and_writes_no_appeal(self):
+        self.submit()
+        response = self.appeal({"content_id": "made-up-id", "reasoning": "Mine."})
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["error"], "not_found")
+        self.assertEqual(self.appeals(), [])
+        rejection = self.rejections()[-1]
+        self.assertEqual(rejection["requested_content_id"], "made-up-id")
+        self.assertNotIn("content_id", rejection)
+
+    def test_id_seen_only_in_a_rejection_cannot_be_appealed(self):
+        audit.log_rejection(creator_id="w", reason="x", content_id="ghost")
+        response = self.appeal({"content_id": "ghost", "reasoning": "Mine."})
+        self.assertEqual(response.status_code, 404)
+
+    def test_bad_bodies(self):
+        real_id = self.submit().get_json()["content_id"]
+        cases = [
+            ("not an object", ["x"], "invalid_json"),
+            ("no content_id", {"reasoning": "Mine."}, "invalid_content_id"),
+            ("blank content_id", {"content_id": " ", "reasoning": "Mine."}, "invalid_content_id"),
+            ("content_id is a number", {"content_id": 5, "reasoning": "Mine."}, "invalid_content_id"),
+            ("no reasoning", {"content_id": real_id}, "invalid_reasoning"),
+            ("blank reasoning", {"content_id": real_id, "reasoning": "  "}, "invalid_reasoning"),
+            ("reasoning is a list", {"content_id": real_id, "reasoning": ["a"]}, "invalid_reasoning"),
+            ("reasoning too long", {"content_id": real_id,
+                                    "reasoning": "a" * (config.MAX_REASONING_CHARS + 1)},
+             "invalid_reasoning"),
+        ]
+        for name, body, code in cases:
+            with self.subTest(name):
+                response = self.appeal(body)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json()["error"], code)
+        self.assertEqual(self.appeals(), [])
+
+
+class ContentLookup(AppealTestCase):
+
+    def test_new_item_is_decided(self):
+        submitted = self.submit().get_json()
+        response = self.client.get(f"/content/{submitted['content_id']}")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["status"], "decided")
+        self.assertEqual(body["appeal_count"], 0)
+        for field in ("content_id", "creator_id", "guess", "confidence", "label",
+                      "model_score", "style_score"):
+            self.assertEqual(body[field], submitted[field])
+
+    def test_appealed_item_is_under_review(self):
+        content_id = self.submit().get_json()["content_id"]
+        self.appeal({"content_id": content_id, "reasoning": "Mine."})
+        body = self.client.get(f"/content/{content_id}").get_json()
+        self.assertEqual(body["status"], "under_review")
+        self.assertEqual(body["appeal_count"], 1)
+
+    def test_unknown_id_is_404(self):
+        response = self.client.get("/content/nope")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["error"], "not_found")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -263,14 +263,25 @@ style 0.31) and lands at 0.42, also unsure.
 
 | Label | Score range | The exact text a reader sees |
 |---|---|---|
-| high-confidence human |  |  |
-| unsure |  |  |
-| high-confidence AI |  |  |
+| high-confidence human | 0.00 up to (not including) 0.35 | This looks like it was written by a person. Our automated check didn't find the patterns we usually see in AI-generated writing. |
+| unsure | 0.35 to 0.70, both ends included | We can't tell whether this was written by a person or with help from AI. A lot of people's own writing ends up here, so this is not a judgment about the writer, only a sign that our check couldn't decide. |
+| high-confidence AI | above 0.70 up to 1.00 | This reads a lot like AI-generated writing. Automated checks like ours can be wrong, so if you wrote this yourself, you can ask for a person to review it. |
 
-**Why I worded the "unsure" one this way:**
-<!-- It's the hardest of the three. It has to admit uncertainty without
-     sounding like an accusation, because the person reading it may well have
-     written every word themselves. -->
+The text lives in `scoring.py` (`LABEL_HUMAN`, `LABEL_UNSURE`, `LABEL_AI`) and
+the mapping in `scoring.py::score_to_label`. There's no gap: every score from
+0 to 1 maps to exactly one label, which a unit test checks in steps of 0.01.
+All three are reachable with real text; see the calibration table above (Twain
+got human, Hemingway got unsure, the chatbot paragraphs got AI) and the Sample
+Run below.
+
+**Why I worded the "unsure" one this way:** The person reading it probably
+wrote every word, so it can't sound like a softer accusation. It says plainly
+that the check couldn't decide, tells them they're in good company ("a lot of
+people's own writing ends up here"), and says out loud that it's not a
+judgment about them. I kept numbers and words like "confidence" out of all
+three, because a score of 0.42 means nothing to a writer. The AI label is the
+only one that mentions review, because it's the only one where someone has a
+reason to want it.
 
 
 
@@ -291,11 +302,11 @@ style 0.31) and lands at 0.42, also unsure.
 ```bash
 $ curl -X POST http://127.0.0.1:5000/submit \
   -H "Content-Type: application/json" \
-  -d '{"text": "...", "creator_id": "..."}'
+  -d '{"text": "Artificial intelligence has become an increasingly important part of modern society. It offers numerous benefits across a wide range of industries, including healthcare, education, and finance. By automating routine tasks, AI allows professionals to focus on more meaningful work. However, it is important to consider the ethical implications of these technologies. Ensuring fairness, transparency, and accountability is essential for building trust. Ultimately, the responsible development of AI will play a key role in shaping a better future for everyone.", "creator_id": "writer_ana"}'
 ```
 
 ```json
-
+{"confidence":0.8765,"content_id":"b7bd3598-3e72-4cf3-bacc-8765acafaef7","creator_id":"writer_ana","guess":"ai","label":"This reads a lot like AI-generated writing. Automated checks like ours can be wrong, so if you wrote this yourself, you can ask for a person to review it.","model_score":0.882,"status":"decided","style_score":0.871}
 ```
 
 **An appeal**
@@ -303,22 +314,60 @@ $ curl -X POST http://127.0.0.1:5000/submit \
 ```bash
 $ curl -X POST http://127.0.0.1:5000/appeal \
   -H "Content-Type: application/json" \
-  -d '{"content_id": "...", "reasoning": "..."}'
+  -d '{"content_id": "b7bd3598-3e72-4cf3-bacc-8765acafaef7", "reasoning": "I wrote this for my intro to tech ethics class. I write in a pretty textbook way because that is how we were taught to write summaries."}'
 ```
 
 ```json
-
+{"content_id":"b7bd3598-3e72-4cf3-bacc-8765acafaef7","message":"Thanks. Your appeal has been recorded and a person will review this decision. Until then it's marked as under review.","status":"under_review"}
 ```
 
-**What the log shows afterwards**
+**What the log shows afterwards** (the original decision line, then the appeal
+right after it; nothing was overwritten)
 
 ```bash
-$ curl "http://127.0.0.1:5000/log?limit=3"
+$ curl "http://127.0.0.1:5000/log"
 ```
 
 ```json
-
+{"timestamp": "2026-11-01T01:31:09+00:00", "content_id": "b7bd3598-3e72-4cf3-bacc-8765acafaef7", "creator_id": "writer_ana", "guess": "ai", "model_score": 0.882, "style_score": 0.871, "combined_score": 0.8765, "label": "This reads a lot like AI-generated writing. Automated checks like ours can be wrong, so if you wrote this yourself, you can ask for a person to review it.", "status": "decided", "word_count": 79}
+{"content_id": "b7bd3598-3e72-4cf3-bacc-8765acafaef7", "creator_id": "writer_ana", "event": "appeal", "reasoning": "I wrote this for my intro to tech ethics class. I write in a pretty textbook way because that is how we were taught to write summaries.", "status": "under_review", "timestamp": "2026-11-01T01:31:19+00:00"}
 ```
+
+**The item's status afterwards** (stretch: `GET /content/<id>`)
+
+```bash
+$ curl http://127.0.0.1:5000/content/b7bd3598-3e72-4cf3-bacc-8765acafaef7
+```
+
+```json
+{"appeal_count":1,"confidence":0.8765,"content_id":"b7bd3598-3e72-4cf3-bacc-8765acafaef7","creator_id":"writer_ana","guess":"ai","label":"This reads a lot like AI-generated writing. Automated checks like ours can be wrong, so if you wrote this yourself, you can ask for a person to review it.","model_score":0.882,"status":"under_review","style_score":0.871,"submitted_at":"2026-11-01T01:31:09+00:00"}
+```
+
+**Bad input, and what it leaves in the log**
+
+```bash
+$ curl -X POST http://127.0.0.1:5000/submit -H "Content-Type: application/json" \
+  -d '{"text": "", "creator_id": "writer_ana"}'
+{"error":"invalid_text","message":"\"text\" must be a non-empty string."}      # HTTP 400
+
+$ curl -X POST http://127.0.0.1:5000/appeal -H "Content-Type: application/json" \
+  -d '{"content_id": "not-a-real-id", "reasoning": "mine"}'
+{"error":"not_found","message":"We couldn't find a submission with that id."}  # HTTP 404
+
+$ curl "http://127.0.0.1:5000/log?limit=2"
+{"count":2,"entries":[{"creator_id":"writer_ana","event":"rejected","reason":"invalid_text","route":"submit","status":"rejected","timestamp":"2026-11-01T01:31:19+00:00"},{"creator_id":"unknown","event":"rejected","reason":"not_found","requested_content_id":"not-a-real-id","route":"appeal","status":"rejected","timestamp":"2026-11-01T01:31:19+00:00"}]}
+```
+
+The other two labels, from the same run: Twain's opening scored 0.2269
+(human) and Hemingway's scored 0.4204 (unsure). The first entry in
+`logs/audit.jsonl` is from Milestone 3, before the style signal and labels
+existed, which is why it has `style_score` 0.5 and a placeholder label. I left
+it there because the log is append-only.
+
+**Tests:** `python -m unittest discover tests` runs 53 unit tests (route
+contract, every bad-input case, the appeal path, the combining rule, label
+coverage, each style measure). The detector is stubbed in route tests so they
+run in under a second.
 
 ---
 

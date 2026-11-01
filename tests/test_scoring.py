@@ -70,6 +70,16 @@ class ScoreToLabel(unittest.TestCase):
             seen.add(guess)
         self.assertEqual(seen, {"human", "unsure", "ai"})
 
+    def test_label_text_is_written_for_a_person(self):
+        labels = {scoring.score_to_label(x)[1] for x in (0.1, 0.5, 0.9)}
+        self.assertEqual(len(labels), 3)
+        for label in labels:
+            with self.subTest(label=label):
+                self.assertNotIn("PLACEHOLDER", label)
+                self.assertNotIn("threshold", label.lower())
+                self.assertFalse(any(ch.isdigit() for ch in label))
+                self.assertTrue(label.endswith("."))
+
 
 if __name__ == "__main__":
     unittest.main()

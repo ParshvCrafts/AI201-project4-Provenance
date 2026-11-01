@@ -18,8 +18,9 @@ doesn't, it's the service itself.
 Routes:
 
     POST /ping        the worked example. Already works. Don't edit it
-    POST /submit      ← YOU BUILD THIS (Milestone 3, 4, 5)
-    POST /appeal      ← YOU BUILD THIS (Milestone 5)
+    POST /submit      judge a piece of text, log it, return the label
+    POST /appeal      the writer disagrees: log it, move to under_review
+    GET  /content/<id> one item's current status (stretch)
     GET  /log         the audit log. Already works
     GET  /health      is the service up, and is the model loaded
 """
@@ -324,15 +325,78 @@ def appeal():
     This is the smallest endpoint in the project and the one that matters most
     to the person on the other end. It's the only thing standing between a
     wrong accusation and nothing at all.
-    """
-    payload = request.get_json(silent=True) or {}
 
-    # TODO: delete this and build the route.
+    A second appeal on the same item is allowed and logged too: refusing it
+    would throw away whatever the writer wanted to add.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _reject(400, "invalid_json",
+                       'Send a JSON object with "content_id" and "reasoning".',
+                       route="appeal")
+
+    content_id = payload.get("content_id")
+    if not isinstance(content_id, str) or not content_id.strip():
+        return _reject(400, "invalid_content_id",
+                       '"content_id" must be the id you got back from /submit.',
+                       route="appeal")
+    content_id = content_id.strip()
+
+    reasoning = payload.get("reasoning")
+    if (not isinstance(reasoning, str) or not reasoning.strip()
+            or len(reasoning.strip()) > config.MAX_REASONING_CHARS):
+        return _reject(400, "invalid_reasoning",
+                       f'"reasoning" must be a non-empty string of at most '
+                       f"{config.MAX_REASONING_CHARS:,} characters.",
+                       route="appeal", requested_content_id=content_id[:100])
+
+    decision = _find_decision(content_id)
+    if decision is None:
+        return _reject(404, "not_found",
+                       "We couldn't find a submission with that id.",
+                       route="appeal", requested_content_id=content_id[:100])
+
+    audit.log_appeal(content_id, decision["creator_id"], reasoning.strip())
     return jsonify({
-        "error": "not_implemented",
-        "message": "POST /appeal isn't built yet — see the TODO in app.py.",
-        "you_sent": payload,
-    }), 501
+        "content_id": content_id,
+        "status": "under_review",
+        "message": ("Thanks. Your appeal has been recorded and a person will "
+                    "review this decision. Until then it's marked as under review."),
+    })
+
+
+@app.get("/content/<content_id>")
+def content(content_id):
+    """
+    One item's current status (stretch). The original decision plus whatever
+    happened after it, read back from the append-only audit log.
+    """
+    decision = _find_decision(content_id)
+    if decision is None:
+        return jsonify({"error": "not_found",
+                        "message": "We couldn't find a submission with that id."}), 404
+
+    entries = audit.entries_for(content_id)
+    return jsonify({
+        "content_id": content_id,
+        "creator_id": decision["creator_id"],
+        "guess": decision["guess"],
+        "confidence": decision["combined_score"],
+        "label": decision["label"],
+        "model_score": decision["model_score"],
+        "style_score": decision["style_score"],
+        "submitted_at": decision["timestamp"],
+        "status": entries[-1]["status"],
+        "appeal_count": sum(1 for e in entries if e.get("event") == "appeal"),
+    })
+
+
+def _find_decision(content_id: str) -> dict | None:
+    """The original decision for an id, or None. Rejections and appeals don't count."""
+    for entry in audit.entries_for(content_id):
+        if entry.get("status") == "decided" and "event" not in entry:
+            return entry
+    return None
 
 
 # ── Already works ─────────────────────────────────────────────────────────────

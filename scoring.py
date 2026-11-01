@@ -95,14 +95,30 @@ def score_to_label(score: float) -> tuple[str, str]:
     think if they got it on their own work. That question is the whole
     milestone.
     """
-    # TODO: replace this — thresholds are in config.py
     # Both boundaries belong to "unsure": combine_signals holds disagreements
     # AT the thresholds, and that must never become a confident label.
     if score > config.AI_THRESHOLD:
-        return "ai", "PLACEHOLDER — write the high-confidence AI label."
+        return "ai", LABEL_AI
     if score < config.HUMAN_THRESHOLD:
-        return "human", "PLACEHOLDER — write the high-confidence human label."
-    return "unsure", "PLACEHOLDER — write the unsure label."
+        return "human", LABEL_HUMAN
+    return "unsure", LABEL_UNSURE
+
+
+# The exact text a reader sees. Copied word for word into the README.
+LABEL_HUMAN = (
+    "This looks like it was written by a person. Our automated check didn't "
+    "find the patterns we usually see in AI-generated writing."
+)
+LABEL_UNSURE = (
+    "We can't tell whether this was written by a person or with help from AI. "
+    "A lot of people's own writing ends up here, so this is not a judgment "
+    "about the writer, only a sign that our check couldn't decide."
+)
+LABEL_AI = (
+    "This reads a lot like AI-generated writing. Automated checks like ours "
+    "can be wrong, so if you wrote this yourself, you can ask for a person to "
+    "review it."
+)
 
 
 def label_ranges() -> list[tuple[str, str]]:
