@@ -39,11 +39,36 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_REQUEST_BYTES
 
 
-def _creator_for_log(creator_id) -> str:
-    """A creator_id safe to write into a rejection, whatever the caller sent."""
-    if isinstance(creator_id, str) and creator_id.strip():
-        return creator_id.strip()[:config.MAX_CREATOR_ID_CHARS]
-    return "unknown"
+def _json_body():
+    """
+    The request body as parsed JSON, or None if it isn't JSON.
+
+    silent=True swallows malformed JSON but not RecursionError, which deeply
+    nested input like `[[[[...` raises well under the size cap.
+    """
+    try:
+        return request.get_json(silent=True)
+    except RecursionError:
+        return None
+
+
+def _clean_str(value) -> str | None:
+    """
+    `value` trimmed, or None if it isn't a string with something visible in it.
+
+    Also None for strings that can't be written as UTF-8: a lone surrogate like
+    "\\ud800" is valid JSON but crashes the audit log write.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    value = value.strip()
+    if not any(ch.isprintable() and not ch.isspace() for ch in value):
+        return None
+    return value
 
 
 def _reject(status: int, code: str, message: str, creator_id: str = "unknown", **extra):
@@ -61,7 +86,7 @@ def _reject(status: int, code: str, message: str, creator_id: str = "unknown", *
 @app.errorhandler(413)
 def body_too_large(exc):
     """A body over MAX_REQUEST_BYTES never reaches a route; it still gets logged."""
-    return _reject(413, "text_too_long",
+    return _reject(413, "request_too_large",
                    f"Request body can be at most {config.MAX_REQUEST_BYTES:,} bytes.",
                    route=request.path)
 
@@ -234,17 +259,17 @@ def submit():
     My answer: every bad input gets a 4xx with a JSON error AND a `rejected`
     entry in the audit log. The contract is in the README under What This Does.
     """
-    payload = request.get_json(silent=True)
+    payload = _json_body()
     if not isinstance(payload, dict):
         return _reject(400, "invalid_json",
                        'Send a JSON object with "text" and "creator_id".',
                        route="submit")
 
-    creator_id = payload.get("creator_id")
-    creator_for_log = _creator_for_log(creator_id)
+    creator_id = _clean_str(payload.get("creator_id"))
+    creator_for_log = creator_id[:config.MAX_CREATOR_ID_CHARS] if creator_id else "unknown"
     text = payload.get("text")
 
-    if not isinstance(text, str) or not text.strip():
+    if _clean_str(text) is None:
         return _reject(400, "invalid_text",
                        '"text" must be a non-empty string.',
                        creator_for_log, route="submit")
@@ -257,13 +282,11 @@ def submit():
         return _reject(400, "text_too_short",
                        f"Text needs at least {config.MIN_WORDS} words to be checked.",
                        creator_for_log, route="submit", word_count=word_count)
-    if (not isinstance(creator_id, str) or not creator_id.strip()
-            or len(creator_id.strip()) > config.MAX_CREATOR_ID_CHARS):
+    if creator_id is None or len(creator_id) > config.MAX_CREATOR_ID_CHARS:
         return _reject(400, "invalid_creator_id",
                        f'"creator_id" must be a non-empty string of at most '
                        f"{config.MAX_CREATOR_ID_CHARS} characters.",
                        creator_for_log, route="submit")
-    creator_id = creator_id.strip()
 
     try:
         model_score = detector.model_signal(text)
@@ -329,22 +352,20 @@ def appeal():
     A second appeal on the same item is allowed and logged too: refusing it
     would throw away whatever the writer wanted to add.
     """
-    payload = request.get_json(silent=True)
+    payload = _json_body()
     if not isinstance(payload, dict):
         return _reject(400, "invalid_json",
                        'Send a JSON object with "content_id" and "reasoning".',
                        route="appeal")
 
-    content_id = payload.get("content_id")
-    if not isinstance(content_id, str) or not content_id.strip():
+    content_id = _clean_str(payload.get("content_id"))
+    if content_id is None:
         return _reject(400, "invalid_content_id",
                        '"content_id" must be the id you got back from /submit.',
                        route="appeal")
-    content_id = content_id.strip()
 
-    reasoning = payload.get("reasoning")
-    if (not isinstance(reasoning, str) or not reasoning.strip()
-            or len(reasoning.strip()) > config.MAX_REASONING_CHARS):
+    reasoning = _clean_str(payload.get("reasoning"))
+    if reasoning is None or len(reasoning) > config.MAX_REASONING_CHARS:
         return _reject(400, "invalid_reasoning",
                        f'"reasoning" must be a non-empty string of at most '
                        f"{config.MAX_REASONING_CHARS:,} characters.",
@@ -356,7 +377,7 @@ def appeal():
                        "We couldn't find a submission with that id.",
                        route="appeal", requested_content_id=content_id[:100])
 
-    audit.log_appeal(content_id, decision["creator_id"], reasoning.strip())
+    audit.log_appeal(content_id, decision["creator_id"], reasoning)
     return jsonify({
         "content_id": content_id,
         "status": "under_review",

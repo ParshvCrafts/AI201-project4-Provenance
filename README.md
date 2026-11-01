@@ -1,6 +1,6 @@
 # Provenance Guard
 
-> ### 👋 Start here
+> ### ðŸ‘‹ Start here
 >
 > **New to this repo? Read [RUNNING.md](RUNNING.md) first.**
 >
@@ -25,14 +25,14 @@
 
 ---
 
-<!-- ─────────────────────────────────────────────────────────────────────────
+<!-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
      Unit 7 asks for the first five sections. Unit 8 adds the five below.
 
      Everything is pasted as TEXT. A pasted curl response gets full credit;
      a picture of your terminal gets none.
-     ───────────────────────────────────────────────────────────────────────── -->
+     â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
 
-<!-- ═══════════════════════ UNIT 7 — THE BUILD ═══════════════════════ -->
+<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• UNIT 7 â€” THE BUILD â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
 
 ## What This Does
 
@@ -113,7 +113,7 @@ All requests and responses are JSON. Every error response has the same shape:
 | `status` | string | always `"decided"` on a new submission |
 
 Errors: `400 invalid_json` (body isn't a JSON object), `400 invalid_text`,
-`400 text_too_short`, `400 invalid_creator_id`, `413 text_too_long` (also when
+`400 text_too_short`, `400 invalid_creator_id`, `413 text_too_long`, `413 request_too_large` (when
 the raw body is over 1 MB), `503 detector_unavailable` (the model couldn't load).
 
 **`POST /appeal`**
@@ -130,7 +130,8 @@ the raw body is over 1 MB), `503 detector_unavailable` (the model couldn't load)
 | `message` | string | confirmation for the writer |
 
 Errors: `400 invalid_json`, `400 invalid_content_id`, `400 invalid_reasoning`,
-`404 not_found` (no decision with that id). Appealing twice is allowed; each
+`404 not_found` (no decision with that id), `413 request_too_large` (body over
+1 MB). Appealing twice is allowed; each
 appeal is logged and the status stays `under_review`.
 
 **`GET /content/<content_id>`** (stretch, see below) returns the original
@@ -152,9 +153,9 @@ verified-human path (it needs credential storage and a whole extra flow).
      human and AI writing, and WHAT IT CAN'T SEE.
 
      The blind spot is not optional. If you can't name it you don't understand
-     the signal yet — and unit 8's attack set is built out of blind spots. -->
+     the signal yet â€” and unit 8's attack set is built out of blind spots. -->
 
-### Signal one — the model signal
+### Signal one â€” the model signal
 
 **What it measures:** How predictable the text is to GPT-2, running locally
 (`detector.py::model_signal`). It computes perplexity over the first 400 tokens
@@ -172,8 +173,11 @@ writing is predictable whoever wrote it: second-language writers, younger
 writers, anyone keeping it simple. It also can't see an AI text that was
 prompted to use rare words or was paraphrased into stranger phrasing, and it
 only reads the first 400 tokens, so anything after that is invisible to it.
+And it's English only: GPT-2 was trained on English, and the word counter only
+counts a-z and 0-9, so text in another script is refused as too short instead of
+being given a label that would mean nothing.
 
-### Signal two — the style signal
+### Signal two â€” the style signal
 
 **What it measures:** The shape of the text, without reading it
 (`stylometry.py::style_signal`). Two measures count toward the score:
@@ -364,7 +368,7 @@ The other two labels, from the same run: Twain's opening scored 0.2269
 existed, which is why it has `style_score` 0.5 and a placeholder label. I left
 it there because the log is append-only.
 
-**Tests:** `python -m unittest discover tests` runs 53 unit tests (route
+**Tests:** `python -m unittest discover tests` runs 59 unit tests (route
 contract, every bad-input case, the appeal path, the combining rule, label
 coverage, each style measure). The detector is stubbed in route tests so they
 run in under a second.
@@ -385,7 +389,7 @@ run in under a second.
 - *What came back:*
 - *What I changed:*
 
-<!-- ═══════════════════════ UNIT 8 — THE TEST ═══════════════════════ -->
+<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• UNIT 8 â€” THE TEST â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
 
 ---
 
@@ -400,7 +404,7 @@ run in under a second.
      the second. -->
 
 **What a caller counts as:** <!-- per address, or per creator_id? They fail
-differently — one script can look like a thousand callers, and one household
+differently â€” one script can look like a thousand callers, and one household
 can look like one. -->
 
 **The run of status codes when I pushed past it:**
@@ -413,7 +417,7 @@ can look like one. -->
 
 ---
 
-## Attack Run — Before
+## Attack Run â€” Before
 
 <!-- Every attack with its outcome and a held-or-broke mark.
      `run_attacks.py --label before` produces the table. -->
@@ -428,7 +432,7 @@ can look like one. -->
 
 ```
 
-**The single worst outcome** — the one I'd least want to explain to a writer
+**The single worst outcome** â€” the one I'd least want to explain to a writer
 whose work got caught by it:
 
 
@@ -464,7 +468,7 @@ that produced it:
      Not a diagnosis:  "The evasion attacks got through."
      A diagnosis:      "Four evasion inputs got through. All four had typos
                         added to AI-generated text. My second signal measures
-                        word variety, and typos raise word variety — so it read
+                        word variety, and typos raise word variety â€” so it read
                         them as more human. My combining rule weights that
                         signal at 0.6, so it dragged the whole score down."
 
@@ -480,7 +484,7 @@ that produced it:
 
 **Which diagnosis pointed at it:**
 
-### Attack Run — After
+### Attack Run â€” After
 
 <!-- Same format. `run_attacks.py --label after` -->
 
@@ -509,9 +513,9 @@ that produced it:
 
 
 
-<!-- ═════════════════════════════════════════════════════════════════════
+<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-     SUBMISSION CHECKLIST — unit 7
+     SUBMISSION CHECKLIST â€” unit 7
 
        [ ] criteria.md has five numbered criteria, each naming a target
        [ ] Each has a reason underneath
@@ -523,9 +527,9 @@ that produced it:
        [ ] Signals and Scoring names scoring.py::combine_signals
        [ ] Sample Run: a submission AND an appeal, as pasted text
        [ ] At least four new commits
-       [ ] Repository URL submitted — WRITE IT DOWN
+       [ ] Repository URL submitted â€” WRITE IT DOWN
 
-     SUBMISSION CHECKLIST — unit 8
+     SUBMISSION CHECKLIST â€” unit 8
 
        [ ] Rate limiting on /submit, with your numbers justified
        [ ] The pasted run of status codes showing 429
@@ -533,15 +537,15 @@ that produced it:
        [ ] The attack set run IN FULL, every input with an outcome
        [ ] Ten audit log entries pasted as text
        [ ] Five criteria across three trials
-       [ ] A diagnosis for every miss and every broken attack — stage AND mechanism
-       [ ] One improvement, with Attack Run — After
+       [ ] A diagnosis for every miss and every broken attack â€” stage AND mechanism
+       [ ] One improvement, with Attack Run â€” After
        [ ] What's Still Broken, including the production trade
        [ ] At least four new commits
        [ ] The SAME repository URL as last unit
 
      Do not delete and recreate this repository.
-     ═════════════════════════════════════════════════════════════════════ -->
+     â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
 
 ---
 
-📖 **How to run this project: [RUNNING.md](RUNNING.md)**
+ðŸ“– **How to run this project: [RUNNING.md](RUNNING.md)**

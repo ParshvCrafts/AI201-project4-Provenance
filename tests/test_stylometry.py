@@ -18,6 +18,15 @@ LUMPY_REPETITIVE = (  # sentence lengths 2, 22, 3 and lots of repeats
 )
 
 
+class Words(unittest.TestCase):
+
+    def test_apostrophes_alone_are_not_words(self):
+        self.assertEqual(st.words("' ' ''"), [])
+
+    def test_contractions_stay_whole(self):
+        self.assertEqual(st.words("Don't stop, it's fine"), ["don't", "stop", "it's", "fine"])
+
+
 class SentenceLengthSpread(unittest.TestCase):
 
     def test_equal_lengths_have_no_spread(self):

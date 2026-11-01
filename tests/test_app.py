@@ -163,8 +163,37 @@ class SubmitBadInput(RouteTestCase):
         huge = json.dumps({"text": "a" * (config.MAX_REQUEST_BYTES + 10), "creator_id": "w"})
         response = self.client.post("/submit", data=huge, content_type="application/json")
         self.assertEqual(response.status_code, 413)
-        self.assertEqual(response.get_json()["error"], "text_too_long")
+        self.assertEqual(response.get_json()["error"], "request_too_large")
         self.assertEqual(len(self.rejections()), 1)
+
+    def test_deeply_nested_json_is_400_not_500(self):
+        for raw in ("[" * 400_000, '{"a":' * 100_000):
+            response = self.client.post("/submit", data=raw, content_type="application/json")
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.get_json()["error"], "invalid_json")
+
+    def test_strings_that_cannot_be_logged_are_400_not_500(self):
+        # A lone surrogate parses as JSON but can't be written as UTF-8.
+        cases = [
+            ('{"text": "%s", "creator_id": "\\ud800"}' % GOOD_TEXT, "invalid_creator_id"),
+            ('{"text": "\\ud800 %s", "creator_id": "w"}' % GOOD_TEXT, "invalid_text"),
+        ]
+        for raw, code in cases:
+            with self.subTest(code):
+                response = self.client.post("/submit", data=raw, content_type="application/json")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json()["error"], code)
+        self.assertEqual(len(self.rejections()), 2)
+
+    def test_invisible_creator_id_is_blank(self):
+        for creator in ("​", " ​"):
+            with self.subTest(repr(creator)):
+                response = self.submit({"text": GOOD_TEXT, "creator_id": creator})
+                self.assertEqual(response.get_json()["error"], "invalid_creator_id")
+
+    def test_apostrophes_alone_are_not_words(self):
+        response = self.submit({"text": "' " * 30, "creator_id": "w"})
+        self.assertEqual(response.get_json()["error"], "text_too_short")
 
     def test_rejection_keeps_creator_when_known(self):
         self.submit({"text": "", "creator_id": "writer_9"})
@@ -264,6 +293,18 @@ class Appeal(AppealTestCase):
                                     "reasoning": "a" * (config.MAX_REASONING_CHARS + 1)},
              "invalid_reasoning"),
         ]
+        raw_cases = [
+            ("surrogate content_id", '{"content_id": "\\ud800", "reasoning": "r"}',
+             "invalid_content_id"),
+            ("surrogate reasoning", '{"content_id": "%s", "reasoning": "\\ud800"}' % real_id,
+             "invalid_reasoning"),
+            ("deeply nested", "[" * 400_000, "invalid_json"),
+        ]
+        for name, raw, code in raw_cases:
+            with self.subTest(name):
+                response = self.client.post("/appeal", data=raw, content_type="application/json")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json()["error"], code)
         for name, body, code in cases:
             with self.subTest(name):
                 response = self.appeal(body)

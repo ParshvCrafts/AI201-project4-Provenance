@@ -51,8 +51,13 @@ def sentences(text: str) -> list[str]:
 
 
 def words(text: str) -> list[str]:
-    """Split into lowercase words, punctuation stripped. Given to you."""
-    return re.findall(r"[a-z0-9']+", text.lower())
+    """
+    Split into lowercase words, punctuation stripped. Given to you.
+
+    Changed: a word needs at least one letter or digit, so a run of stray
+    apostrophes no longer counts as words.
+    """
+    return re.findall(r"[a-z0-9']*[a-z0-9][a-z0-9']*", text.lower())
 
 
 # ── The three measures — YOU BUILD THESE ─────────────────────────────────────
