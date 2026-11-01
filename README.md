@@ -379,15 +379,37 @@ run in under a second.
 
 **Moment 1**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I had an AI assistant implement the three style measures
+  following the hints in `stylometry.py`, then run both signals over six
+  calibration texts (`calibrate.py`) before deciding any weights.
+- *What came back:* The raw table. Two things in it didn't match the hints. AI
+  text had *higher* vocabulary variety than the human texts (0.88 vs
+  0.71-0.83), not lower, and punctuation density didn't separate AI from human
+  at all.
+- *What I changed:* I went with the data, not the hint. Vocabulary variety
+  now counts as AI-like when it's high, punctuation gets weight 0 (still
+  printed so I can see it in unit 8), and the spread and vocabulary anchors in
+  `config.py` are rounded from that table. I also moved the AI threshold from
+  0.65 to 0.70 after seeing Orwell land at 0.57.
 
 **Moment 2**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* A second AI session with a fresh context reviewed the
+  finished routes. I asked it to find any input that makes `/submit` or
+  `/appeal` return a 500 instead of a 4xx, and to prove each one by running it.
+- *What came back:* Five findings. Two were real 500s: a lone UTF-16 surrogate
+  like `"\ud800"` parses as JSON but crashes the log write, and deeply nested
+  JSON (`[[[[...`) raises a `RecursionError` that `get_json(silent=True)`
+  doesn't catch. It also found that a `creator_id` made of a zero-width space
+  counted as "not blank", that `"' ' '"` counted as words, and that a 413 on
+  `/appeal` was logged as `text_too_long`.
+- *What I changed:* I wrote a failing test for each one first, then fixed them
+  in `app.py` (`_json_body`, `_clean_str`, a renamed `request_too_large` code)
+  and in `stylometry.py::words`. I didn't take one suggestion: it pointed out
+  the label is computed from the rounded score, but that's on purpose, so
+  the label always agrees with the number the writer sees. Its point that
+  non-English text gets refused I kept as a known limitation, not a fix, since
+  GPT-2 here is an English model.
 
 <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• UNIT 8 â€” THE TEST â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
 
