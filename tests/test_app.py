@@ -46,6 +46,12 @@ class RouteTestCase(unittest.TestCase):
         self.model_signal = patcher.start()
         self.addCleanup(patcher.stop)
 
+        # Most tests send many requests as one creator. The limiter gets its
+        # own test class below; everywhere else it would only add noise.
+        patcher = mock.patch.object(app_module.limiter, "enabled", False, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         self.client = app_module.app.test_client()
 
     def submit(self, body=None, **kwargs):
@@ -337,6 +343,76 @@ class ContentLookup(AppealTestCase):
         response = self.client.get("/content/nope")
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.get_json()["error"], "not_found")
+
+
+@unittest.skipUnless(config.RATE_LIMITING_ENABLED, "rate limiting is switched off")
+class RateLimit(RouteTestCase):
+    """POST /submit is capped per creator_id, and every 429 leaves a trace."""
+
+    PER_MINUTE = config.RATE_LIMIT_PER_MINUTE
+
+    def setUp(self):
+        super().setUp()
+        app_module.limiter.enabled = True  # undone by the patch cleanup
+        app_module.limiter.reset()  # counts from other tests must not leak in
+        self.addCleanup(app_module.limiter.reset)
+
+    def fill_bucket(self, creator="flooder"):
+        for _ in range(self.PER_MINUTE):
+            self.assertEqual(self.submit({"text": GOOD_TEXT, "creator_id": creator}).status_code, 200)
+
+    def test_numbers_are_the_chosen_ones(self):
+        self.assertEqual((config.RATE_LIMIT_PER_MINUTE, config.RATE_LIMIT_PER_DAY), (5, 50))
+
+    def test_one_over_the_minute_limit_is_a_json_429(self):
+        self.fill_bucket()
+        response = self.submit({"text": GOOD_TEXT, "creator_id": "flooder"})
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.get_json()["error"], "rate_limited")
+
+    def test_flood_of_15_gives_5_then_10_rejections(self):
+        codes = [self.submit({"text": GOOD_TEXT, "creator_id": "flooder"}).status_code
+                 for _ in range(15)]
+        self.assertEqual(codes, [200] * 5 + [429] * 10)
+
+    def test_every_429_is_logged_with_creator_and_reason(self):
+        self.fill_bucket()
+        self.submit({"text": GOOD_TEXT, "creator_id": "flooder"})
+        self.submit({"text": GOOD_TEXT, "creator_id": "flooder"})
+        limited = [e for e in self.rejections() if e.get("reason") == "rate_limited"]
+        self.assertEqual(len(limited), 2)
+        for entry in limited:
+            self.assertEqual(entry["creator_id"], "flooder")
+            self.assertIn("timestamp", entry)
+            self.assertIn("5 per 1 minute", entry["limit"])
+
+    def test_a_limited_request_never_reaches_the_detector(self):
+        self.fill_bucket()
+        self.model_signal.reset_mock()
+        self.submit({"text": GOOD_TEXT, "creator_id": "flooder"})
+        self.model_signal.assert_not_called()
+
+    def test_other_creators_are_not_affected(self):
+        self.fill_bucket("flooder")
+        self.assertEqual(self.submit({"text": GOOD_TEXT, "creator_id": "someone_else"}).status_code, 200)
+
+    def test_no_creator_id_counts_against_the_address(self):
+        # Five 400s still spend the address's budget: the limiter runs before
+        # the route, so a script can't probe for free with bad requests.
+        for _ in range(self.PER_MINUTE):
+            self.assertEqual(self.submit({"text": GOOD_TEXT}).status_code, 400)
+        response = self.submit({"text": GOOD_TEXT})
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(self.rejections()[-1]["creator_id"], "unknown")
+
+    def test_appeal_is_not_rate_limited(self):
+        content_id = self.submit({"text": GOOD_TEXT, "creator_id": "flooder"}).get_json()["content_id"]
+        for _ in range(self.PER_MINUTE + 2):
+            response = self.client.post("/appeal", json={"content_id": content_id, "reasoning": "Mine."})
+            self.assertEqual(response.status_code, 200)
+
+    def test_health_reports_limiting_on(self):
+        self.assertIs(self.client.get("/health").get_json()["rate_limiting"], True)
 
 
 if __name__ == "__main__":

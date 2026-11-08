@@ -138,10 +138,23 @@ AI_THRESHOLD = 0.70
 # an hour, and a script sending a thousand variations to map your thresholds.
 # Your README has to say why your numbers and not others.
 
-RATE_LIMITING_ENABLED = os.getenv("AI201_RATE_LIMITS", "0") == "1"
+# On by default since unit 8. AI201_RATE_LIMITS=0 switches it off for a local
+# experiment; nothing in the normal workflow should need that.
+RATE_LIMITING_ENABLED = os.getenv("AI201_RATE_LIMITS", "1") == "1"
 
-RATE_LIMIT_PER_MINUTE = 10
-RATE_LIMIT_PER_DAY = 200
+# Counted per creator_id (per address when there isn't one). Why 5 and 50:
+#   - A writer checks a piece, maybe fixes something and checks again. Three or
+#     four tries inside one minute is already a lot; 5 leaves room for that.
+#     50 a day covers several pieces with a few revisions each.
+#   - Every submission costs 1-2 s of model CPU. A script mapping my 0.35/0.70
+#     band needs hundreds of variations. At 5/min and 50/day, 1,000 probes take
+#     20 days per creator_id instead of under two hours at the old 10/min.
+#   - 3/min was tighter but a writer retrying after a typo fix hits it, and
+#     run_eval.py reuses each creator_id across its three trials.
+# Honest limit: a script that invents a new creator_id per request isn't slowed
+# by this at all. That needs accounts, which this service doesn't have.
+RATE_LIMIT_PER_MINUTE = 5
+RATE_LIMIT_PER_DAY = 50
 
 # Flask-Limiter warns loudly without this. In-memory is right for one laptop
 # and wrong for anything real — a restart forgets every count, and two copies

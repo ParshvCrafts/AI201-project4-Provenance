@@ -1,6 +1,6 @@
 # Provenance Guard
 
-> ### ðŸ‘‹ Start here
+> ### 👋 Start here
 >
 > **New to this repo? Read [RUNNING.md](RUNNING.md) first.**
 >
@@ -25,14 +25,14 @@
 
 ---
 
-<!-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+<!-- ─────────────────────────────────────────────────────────────────────────
      Unit 7 asks for the first five sections. Unit 8 adds the five below.
 
      Everything is pasted as TEXT. A pasted curl response gets full credit;
      a picture of your terminal gets none.
-     â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+     ───────────────────────────────────────────────────────────────────────── -->
 
-<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• UNIT 7 â€” THE BUILD â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+<!-- ═══════════════════════ UNIT 7 — THE BUILD ═══════════════════════ -->
 
 ## What This Does
 
@@ -144,6 +144,11 @@ skipping the third signal (punctuation didn't separate AI from human in my
 calibration, so a "third signal" would get a weight near zero) and the
 verified-human path (it needs credential storage and a whole extra flow).
 
+**Unit 8 stretch:** only the per-creator limits note. My limiter keys on
+`creator_id`, falling back to the address, and the Rate Limiting section says
+what that changes compared with per-address limits. I'm skipping the attacks
+on someone else's system and the second improvement to keep this unit small.
+
 
 ---
 
@@ -153,9 +158,9 @@ verified-human path (it needs credential storage and a whole extra flow).
      human and AI writing, and WHAT IT CAN'T SEE.
 
      The blind spot is not optional. If you can't name it you don't understand
-     the signal yet â€” and unit 8's attack set is built out of blind spots. -->
+     the signal yet — and unit 8's attack set is built out of blind spots. -->
 
-### Signal one â€” the model signal
+### Signal one — the model signal
 
 **What it measures:** How predictable the text is to GPT-2, running locally
 (`detector.py::model_signal`). It computes perplexity over the first 400 tokens
@@ -177,7 +182,7 @@ And it's English only: GPT-2 was trained on English, and the word counter only
 counts a-z and 0-9, so text in another script is refused as too short instead of
 being given a label that would mean nothing.
 
-### Signal two â€” the style signal
+### Signal two — the style signal
 
 **What it measures:** The shape of the text, without reading it
 (`stylometry.py::style_signal`). Two measures count toward the score:
@@ -411,35 +416,72 @@ run in under a second.
   non-English text gets refused I kept as a known limitation, not a fix, since
   GPT-2 here is an English model.
 
-<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• UNIT 8 â€” THE TEST â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+<!-- ═══════════════════════ UNIT 8 — THE TEST ═══════════════════════ -->
 
 ---
 
 ## Rate Limiting
 
-**My limits:** ___ per minute, ___ per day
+**My limits:** 5 per minute, 50 per day (`config.py`, applied to `POST /submit` only)
 
 **Why those numbers and not others:**
-<!-- Think about two people: a real writer submitting their own work a few
-     times an hour, and a script sending a thousand variations to map your
-     thresholds. Your numbers have to be liveable for the first and hostile to
-     the second. -->
 
-**What a caller counts as:** <!-- per address, or per creator_id? They fail
-differently â€” one script can look like a thousand callers, and one household
-can look like one. -->
+I thought about two callers. A writer checks a piece, maybe fixes a sentence,
+and checks again. Three or four tries in one minute is already a lot, so 5
+gives them room without me having to guess exactly how fast they retype. 50 a
+day covers several pieces with a few revisions each.
+
+A script trying to map my thresholds needs hundreds of variations, and each
+one costs me 1-2 seconds of GPT-2 on the CPU. At the starter's 10/min with no
+real daily cap, 1,000 probes take under two hours. At 5/min and 50/day they
+take 20 days for one creator_id. I looked at 3/min too, but a writer who fixes
+a typo and resubmits would hit it, and `run_eval.py` reuses each creator_id
+across its three trials, so it would sit right on the edge.
+
+`/appeal` and `/content/<id>` are not limited. They don't run the model, and
+I don't want a writer locked out of appealing because they submitted a lot
+that day (there's a test for that: `test_appeal_is_not_rate_limited`).
+
+**What a caller counts as:** the `creator_id` in the body. If there isn't a
+usable one, the caller's address. So a household sharing one Wi-Fi network
+doesn't share one budget, which is good. The cost is the other side: a script
+that makes up a new `creator_id` for every request is not slowed down at all,
+because to my limiter it looks like a crowd. Fixing that properly needs real
+accounts, which this service doesn't have. One detail I checked: requests
+with no `creator_id` still spend the address's budget even though they end
+in a 400, because the limiter runs before my route does. A script can't probe
+for free by sending bad requests.
 
 **The run of status codes when I pushed past it:**
 
-<!-- python run_attacks.py --flood 15 -->
+`python run_attacks.py --flood 15 --creator flood_warm` (the model was already loaded):
 
 ```
+200 200 200 200 200 429 429 429 429 429 429 429 429 429 429
+```
+
+My first flood run, right after starting the service, gave six 200s instead
+of five:
 
 ```
+200 200 200 200 200 200 429 429 429 429 429 429 429 429 429
+```
+
+I didn't want to wave that away, so I checked. `/health` answered at
+17:19:56 and the first submission came back at 17:21:11, so loading the model
+took about 75 seconds. Flask-Limiter's fixed window starts at the first hit
+and lasts 60 seconds, and that window ran out while request 1 was still
+loading the model. Requests 2-6 landed in a new window. So the six 200s were
+not inside one minute, and the limiter was right. The warm run is the
+representative one. Both runs are in `results/flood_*.md`.
+
+Every 429 leaves a `rejected` entry in `logs/audit.jsonl` with
+`"reason": "rate_limited"`, and I confirmed `GET /log` returns three fresh
+decisions and a 400 rejection after submitting them.
 
 ---
 
-## Attack Run â€” Before
+## Attack Run — Before
 
 <!-- Every attack with its outcome and a held-or-broke mark.
      `run_attacks.py --label before` produces the table. -->
@@ -454,7 +496,7 @@ can look like one. -->
 
 ```
 
-**The single worst outcome** â€” the one I'd least want to explain to a writer
+**The single worst outcome** — the one I'd least want to explain to a writer
 whose work got caught by it:
 
 
@@ -490,7 +532,7 @@ that produced it:
      Not a diagnosis:  "The evasion attacks got through."
      A diagnosis:      "Four evasion inputs got through. All four had typos
                         added to AI-generated text. My second signal measures
-                        word variety, and typos raise word variety â€” so it read
+                        word variety, and typos raise word variety — so it read
                         them as more human. My combining rule weights that
                         signal at 0.6, so it dragged the whole score down."
 
@@ -506,7 +548,7 @@ that produced it:
 
 **Which diagnosis pointed at it:**
 
-### Attack Run â€” After
+### Attack Run — After
 
 <!-- Same format. `run_attacks.py --label after` -->
 
@@ -535,9 +577,9 @@ that produced it:
 
 
 
-<!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+<!-- ═════════════════════════════════════════════════════════════════════
 
-     SUBMISSION CHECKLIST â€” unit 7
+     SUBMISSION CHECKLIST — unit 7
 
        [ ] criteria.md has five numbered criteria, each naming a target
        [ ] Each has a reason underneath
@@ -549,9 +591,9 @@ that produced it:
        [ ] Signals and Scoring names scoring.py::combine_signals
        [ ] Sample Run: a submission AND an appeal, as pasted text
        [ ] At least four new commits
-       [ ] Repository URL submitted â€” WRITE IT DOWN
+       [ ] Repository URL submitted — WRITE IT DOWN
 
-     SUBMISSION CHECKLIST â€” unit 8
+     SUBMISSION CHECKLIST — unit 8
 
        [ ] Rate limiting on /submit, with your numbers justified
        [ ] The pasted run of status codes showing 429
@@ -559,15 +601,15 @@ that produced it:
        [ ] The attack set run IN FULL, every input with an outcome
        [ ] Ten audit log entries pasted as text
        [ ] Five criteria across three trials
-       [ ] A diagnosis for every miss and every broken attack â€” stage AND mechanism
-       [ ] One improvement, with Attack Run â€” After
+       [ ] A diagnosis for every miss and every broken attack — stage AND mechanism
+       [ ] One improvement, with Attack Run — After
        [ ] What's Still Broken, including the production trade
        [ ] At least four new commits
        [ ] The SAME repository URL as last unit
 
      Do not delete and recreate this repository.
-     â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+     ═════════════════════════════════════════════════════════════════════ -->
 
 ---
 
-ðŸ“– **How to run this project: [RUNNING.md](RUNNING.md)**
+📖 **How to run this project: [RUNNING.md](RUNNING.md)**
