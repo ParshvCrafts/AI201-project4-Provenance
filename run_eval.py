@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import json
 import sys
+import uuid
 from pathlib import Path
 
 import config
@@ -56,6 +57,54 @@ def bodies_for(scenario):
         {"text": text, "creator_id": f"eval_{scenario['name'][:12]}_{i}"}
         for i, text in enumerate(scenario["texts"], 1)
     ]
+
+
+def log_count(http, url):
+    """How many entries the audit log holds right now (from GET /health)."""
+    return http.get(f"{url}/health", timeout=10).json()["log_entries"]
+
+
+def recent_entries(http, url, content_id, n=10):
+    """The last few log entries that belong to one content_id."""
+    entries = http.get(f"{url}/log", params={"limit": n}, timeout=10).json()["entries"]
+    return [e for e in entries if e.get("content_id") == content_id]
+
+
+def check_appeal(http, url, content_id, timeout):
+    """
+    Appeal one real content_id and check what criterion 4 asks for: a 200 with
+    status under_review, exactly one new appeal entry, and the original
+    decision entry still there with status `decided`.
+    """
+    response = http.post(f"{url}/appeal", timeout=timeout,
+                             json={"content_id": content_id,
+                                   "reasoning": "I wrote this myself. (run_eval appeal check)"})
+    body = response.json() if response.content else {}
+    mine = recent_entries(http, url, content_id)
+    decisions = [e for e in mine if e.get("event", "decision") == "decision"
+                 and e.get("status") == "decided"]
+    return {
+        "appeal_status": response.status_code,
+        "appeal_body_status": body.get("status"),
+        "status_after": http.get(f"{url}/content/{content_id}",
+                                     timeout=10).json().get("status"),
+        "appeal_entries": sum(1 for e in mine if e.get("event") == "appeal"),
+        "original_decision_intact": len(decisions) == 1,
+    }
+
+
+def check_fake_appeal(http, url, timeout):
+    """An appeal against an id that was never issued: 404, no appeal entry."""
+    fake_id = f"never-issued-{uuid.uuid4()}"
+    response = http.post(f"{url}/appeal", timeout=timeout,
+                             json={"content_id": fake_id, "reasoning": "Made-up id."})
+    tail = http.get(f"{url}/log", params={"limit": 3}, timeout=10).json()["entries"]
+    return {
+        "sent": "appeal against a made-up content_id",
+        "appeal_status": response.status_code,
+        "appeal_entries": sum(1 for e in tail if e.get("event") == "appeal"
+                              and e.get("content_id") == fake_id),
+    }
 
 
 def describe(body):
@@ -103,6 +152,19 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
+    # In my first two "before" runs Windows refused to open a socket once
+    # (WinError 10055) and that request never reached the service, so a trial
+    # failed on my harness, not on my pipeline. Retrying only the *connect*
+    # step is safe even for POST: if the connection never opened, nothing was
+    # sent, so nothing can be submitted twice. Read errors are not retried.
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+
+    http = requests.Session()
+    http.mount("http://", HTTPAdapter(max_retries=Retry(
+        total=None, connect=5, read=0, status=0, other=0,
+        backoff_factor=0.5, allowed_methods=None)))
+
     if args.trials < 3:
         print(f"!! {args.trials} trial(s). The submission asks for three.\n")
 
@@ -116,21 +178,37 @@ def main():
             for i, body in enumerate(bodies_for(scenario), 1):
                 preview = describe(body)
                 try:
-                    response = requests.post(f"{args.url}/submit", json=body,
+                    entries_before = log_count(http, args.url)
+                    response = http.post(f"{args.url}/submit", json=body,
                                              timeout=args.timeout)
                     payload = response.json() if response.content else {}
-                    results.append({
+                    result = {
                         "status": response.status_code,
                         "guess": payload.get("guess"),
                         "confidence": payload.get("confidence"),
                         "model_score": payload.get("model_score"),
                         "style_score": payload.get("style_score"),
                         "label": payload.get("label"),
+                        "error": payload.get("error"),
+                        # Entries this one request added to the audit log.
+                        "log_delta": log_count(http, args.url) - entries_before,
                         "sent": preview,
-                    })
+                    }
+                    if scenario.get("appeal") and response.status_code == 200:
+                        result.update(check_appeal(http, args.url,
+                                                   payload["content_id"], args.timeout))
+                    results.append(result)
                 except Exception as exc:  # noqa: BLE001
                     results.append({"status": None, "error": f"{type(exc).__name__}: {exc}",
                                     "sent": preview})
+
+            for _ in range(scenario.get("fake_appeals", 0)):
+                try:
+                    results.append(check_fake_appeal(http, args.url, args.timeout))
+                except Exception as exc:  # noqa: BLE001
+                    results.append({"appeal_status": None,
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                    "sent": "appeal against a made-up content_id"})
 
             trials.append(results)
             guesses = [r.get("guess") or "—" for r in results]
@@ -184,6 +262,12 @@ def write_report(rows, args):
 
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"\nWrote {path.relative_to(config.ROOT)}")
+
+    # The same results as JSON, so score_eval.py can count them instead of me.
+    raw = [{"name": r["scenario"]["name"], "criterion": r["scenario"].get("criterion"),
+            "trials": r["trials"]} for r in rows]
+    path.with_suffix(".json").write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    print(f"Wrote {path.with_suffix('.json').relative_to(config.ROOT)}")
     print("Commit it. It's the evidence the test actually happened.")
 
 
