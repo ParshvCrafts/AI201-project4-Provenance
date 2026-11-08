@@ -171,13 +171,14 @@ def style_signal(text: str) -> float:
       - vocabulary: HIGH means AI-like in my calibration (the opposite of the
         hint above), so it isn't flipped (VOCAB_HUMAN -> 0, VOCAB_AI -> 1).
       - punctuation: not weighted, see config.py.
-    Then 0.6 x spread + 0.4 x vocabulary. A text with fewer than two sentences
-    has no spread to measure, so that part counts as 0.5 ("can't tell"), and a
-    text with no words at all scores 0.5 overall.
+    Then 0.6 x spread + 0.4 x vocabulary. A text with fewer than
+    config.MIN_SENTENCES_FOR_SPREAD sentences has too few to measure a spread
+    from, so that part counts as 0.5 ("can't tell"), and a text with no words
+    at all scores 0.5 overall.
     """
     if not words(text):
         return 0.5
-    if len(sentences(text)) < 2:
+    if len(sentences(text)) < config.MIN_SENTENCES_FOR_SPREAD:
         spread_part = 0.5
     else:
         spread_part = _scale(sentence_length_spread(text),

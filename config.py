@@ -98,6 +98,14 @@ VOCAB_AI = 0.90        # at or above this scores 1.0
 STYLE_WEIGHT_SPREAD = 0.6
 STYLE_WEIGHT_VOCAB = 0.4
 
+# Unit 8 fix. Below this many sentences the spread counts as 0.5 ("can't
+# tell") instead of being measured. Why: a standard deviation from n values is
+# itself uncertain by roughly 1/sqrt(2(n-1)), which is 50% at 3 sentences and
+# 35% at 5, and my spread anchors (0.15 vs 0.60) came from texts with 7-8
+# sentences. In unit 8, a 3-sentence passage from The Wizard of Oz got spread
+# 0.16 from long, evenly built sentences and was labelled AI.
+MIN_SENTENCES_FOR_SPREAD = 5
+
 
 # ─── Thresholds (Milestone 5) ────────────────────────────────────────────────
 # Where one label becomes another. Scores run 0.0 (confidently human) to 1.0

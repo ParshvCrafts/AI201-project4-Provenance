@@ -4,18 +4,24 @@ import unittest
 
 import stylometry as st
 
+# Both have five sentences: below config.MIN_SENTENCES_FOR_SPREAD the spread
+# isn't measured at all, so a shorter fixture couldn't test it.
 EVEN_VARIED = (  # every sentence 8 words, almost no repeated words
     "Solar panels convert sunlight directly into usable electricity. "
     "Modern batteries store surplus energy for cloudy evenings. "
     "Smart inverters balance household demand against grid supply. "
-    "Careful installation ensures safety, efficiency, and long lifespans."
+    "Careful installation ensures safety, efficiency, and long lifespans. "
+    "Local councils sometimes offer generous grants toward upfront costs."
 )
-LUMPY_REPETITIVE = (  # sentence lengths 2, 22, 3 and lots of repeats
+LUMPY_REPETITIVE = (  # sentence lengths 2, 22, 3, 1, 2 and lots of repeats
     "I went. "
     "Then I went back to the shop and I went to the back of the shop "
     "and the shop was shut so I went home. "
-    "Shop was shut."
+    "Shop was shut. "
+    "Shut. "
+    "I went."
 )
+FOUR_EVEN = ". ".join(EVEN_VARIED.split(". ")[:4]) + "."  # same text, one sentence short
 
 
 class Words(unittest.TestCase):
@@ -119,9 +125,42 @@ class StyleSignal(unittest.TestCase):
 
     def test_more_even_sentences_score_higher(self):
         # Same words, different sentence breaks: only spread changes.
-        even = "aa bb cc dd. ee ff gg hh. ii jj kk ll."
-        lumpy = "aa. bb cc dd ee ff gg hh ii jj. kk ll."
+        even = "aa bb cc dd. ee ff gg hh. ii jj kk ll. mm nn oo pp. qq rr ss tt."
+        lumpy = "aa. bb cc dd ee ff gg hh ii jj. kk ll. mm. nn oo pp qq rr ss tt."
         self.assertGreater(st.style_signal(even), st.style_signal(lumpy))
+
+
+class FewSentencesSpreadRule(unittest.TestCase):
+    """Unit 8 fix: a spread from fewer than five sentences is noise, not evidence."""
+
+    def expected_neutral(self, text):
+        vocab = st._scale(st.type_token_ratio(text), st.config.VOCAB_HUMAN, st.config.VOCAB_AI)
+        return st.config.STYLE_WEIGHT_SPREAD * 0.5 + st.config.STYLE_WEIGHT_VOCAB * vocab
+
+    def test_cutoff_is_five(self):
+        self.assertEqual(st.config.MIN_SENTENCES_FOR_SPREAD, 5)
+
+    def test_four_sentences_spread_counts_as_neutral(self):
+        self.assertEqual(len(st.sentences(FOUR_EVEN)), 4)
+        self.assertAlmostEqual(st.style_signal(FOUR_EVEN), self.expected_neutral(FOUR_EVEN))
+
+    def test_five_sentences_spread_is_measured(self):
+        self.assertEqual(len(st.sentences(EVEN_VARIED)), 5)
+        self.assertGreater(st.style_signal(EVEN_VARIED), self.expected_neutral(EVEN_VARIED))
+
+    def test_lumpy_short_text_is_not_trusted_as_human_either(self):
+        # The rule works both ways: three lumpy sentences don't earn "human".
+        text = "I went. Then I went back to the shop and it was shut so I went home. Shut."
+        self.assertAlmostEqual(st.style_signal(text), self.expected_neutral(text))
+
+    def test_the_wizard_of_oz_passage_no_longer_reads_as_ai(self):
+        # Criterion 1's false positive: three long sentences, spread 0.16, style
+        # 0.73 before the fix. With the spread neutral it's vocabulary alone.
+        import scenarios
+        baum = scenarios.SCENARIOS[0]["texts"][1]
+        self.assertTrue(baum.startswith("They now came upon more and more"))
+        self.assertEqual(len(st.sentences(baum)), 3)
+        self.assertLess(st.style_signal(baum), 0.5)
 
 
 if __name__ == "__main__":
