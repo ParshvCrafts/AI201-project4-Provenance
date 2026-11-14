@@ -156,3 +156,8 @@ def clear() -> int:
 def entries_for(content_id: str) -> list[dict]:
     """Every entry touching one content id, in order."""
     return [e for e in read_entries() if e.get("content_id") == content_id]
+
+
+def log_event(event: str, **fields) -> dict:
+    """A service-level event that isn't about one submission, like a startup."""
+    return _append({"timestamp": _now(), "event": event, **fields})
