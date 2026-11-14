@@ -1140,3 +1140,59 @@ writer for example, and sticks.
 ---
 
 📖 **How to run this project: [RUNNING.md](RUNNING.md)**
+
+---
+
+<!-- ═══════════════════════ UNIT 9 — CAPSTONE ═══════════════════════ -->
+
+## Capstone
+
+### The System
+
+I'm extending Provenance Guard, this repo, the Flask service that scores a
+piece of writing with two signals (GPT-2 perplexity and a style measure),
+labels it human, unsure or AI, and lets the writer appeal. I picked it over my
+other three because it's the one whose weak points I know best: I spent unit 8
+attacking it, and I already know where its time goes (GPT-2) and where its
+logging had gaps.
+
+### The Shape
+
+**Shape A, deploy and instrument.** Until now this only ran as `python app.py`,
+Flask's development server, started by hand, with an audit log that recorded
+decisions but not how long anything took or what it cost. What I'm adding:
+
+- a real run path: `python serve.py`, one command that loads the model first and
+  then serves through `waitress` (a production WSGI server that works on
+  Windows, unlike gunicorn);
+- instrumentation on every request, including the failed ones: a request id,
+  the route, the HTTP status, wall time, CPU time, the size and a fingerprint of
+  the input, and for scored submissions the time spent in each stage (GPT-2,
+  style signal, scoring);
+- a handler that logs and answers in JSON when something crashes, instead of a
+  bare HTML 500 with no record;
+- `ops_report.py`, which reads the log back and prints latency percentiles, the
+  per-stage breakdown and CPU seconds per request, and `ops_eval.py`, which
+  starts the server fresh and runs my five criteria three times.
+
+This is Path B, local with logs. The arithmetic is in RUNNING.md: torch plus
+the GPT-2 weights need more than the 512 MB a free host gives.
+
+### Out of Scope
+
+- **No hosting.** I'm not trying to squeeze this onto a free tier by swapping
+  GPT-2 for a smaller model. That would change signal one, and every threshold
+  I calibrated in unit 7 would need redoing.
+- **No changes to the detector's decisions.** The signals, the combining rule
+  and the thresholds stay exactly as unit 8 left them. The "send disagreements
+  to a human" idea from What's Still Broken is a scoring change, not an
+  operations one.
+- **No dashboard.** The numbers come out of a script that reads the log. A web
+  page for them would be a second project.
+
+### Stretch
+
+Only the **latency breakdown** (time per stage of one run, measured). The stage
+timers are part of the instrumentation anyway, so it costs me a few lines in
+the report. I'm skipping the load test, the second improvement and the second
+run path.
