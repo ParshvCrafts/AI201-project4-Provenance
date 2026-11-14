@@ -140,3 +140,77 @@ attack that shows up only as an absence is one I'd never find.
      A number you missed stays where it is, gets diagnosed, and gets a fix
      attempted. That's where the points are.
      ───────────────────────────────────────────────────────────────────────── -->
+
+---
+
+# Capstone criteria (unit 9, shape A: deploy and instrument)
+
+All five are scored by `ops_eval.py`, which starts a fresh `python serve.py`
+for each trial and sends the same 28 requests: 15 real submissions (the 10
+Gutenberg passages from criterion 1 above plus the 5 AI texts from criterion
+2), one appeal, six bad inputs and a six-request flood from one creator. A
+trial is one fresh server. Three trials per run. Criteria 1 to 4 are about the
+extension. Criterion 2 is the bad-path one. Criterion 5 is about the system as
+it already worked.
+
+## C1. The service is ready to score within 30 seconds of starting
+
+**Target:** in 3 of 3 trials, `python serve.py` goes from launch to `/health`
+reporting `detector_loaded: true` in under 30 seconds, timed by the client.
+
+**Why this number:** a restart is when a service is most likely to be
+declared dead. Hosts and process managers usually give a new process about 30
+seconds to pass its first health check before they kill it and try again, and
+a service that takes longer can end up restarting forever. It's also a fair
+ceiling for loading a 523 MB model from local disk. I'm not going stricter
+because the model load is the floor and I'm not changing the model.
+
+## C2. Every request leaves exactly one complete log line, including failures
+
+**Target:** 28 of 28 requests in every trial. Each request's `X-Request-ID`
+matches exactly one line in `logs/audit.jsonl`, that line has `timestamp`,
+`request_id`, `route`, `http_status`, `input_bytes`, `duration_ms` and
+`cpu_ms`, and its `http_status` equals the status the client got. The 28
+include 13 that should fail: not JSON, missing text, too short, too long, a
+1.1 MB body, an appeal for an id that doesn't exist, five more short texts and
+one 429.
+
+**Why this number:** all of them, because the point of the log is that it's
+complete. A request with no line, or two lines, means some code path isn't
+instrumented, and that path is the one I'd never find when it breaks. 27 of 28
+would mean a whole category of request is invisible, not that the log is
+"mostly fine".
+
+## C3. Scored submissions answer in under a second
+
+**Target:** at least 14 of the 15 real submissions in every trial have
+`duration_ms` under 1,000 ms (server-side, from request start to log write).
+
+**Why this number:** about a second is where a writer clicking "check" stops
+feeling an answer and starts feeling a wait. I allow one slow one out of
+fifteen because the first request after a start can pay one-off costs I don't
+want to hide by warming up with fake traffic. 15 of 15 would make that one
+request decide the whole verdict. 10 of 15 would let a third of writers wait.
+
+## C4. One scored submission costs at most one CPU-second
+
+**Target:** in every trial, the mean `cpu_ms` across the 15 real submissions
+is at most 1,000 ms.
+
+**Why this number:** CPU time is the real cost of this system, because there's
+no API bill. Wall time hides how many cores a request burns at once. If one
+submission costs more than one CPU-second, then a small 1 to 2 core server
+(the kind I'd actually pay for) can't keep up with one writer per second, and
+a request that takes half a second of wall time while using several cores
+means two writers at once slow each other down. One CPU-second also matches
+C3: a single-core request that finishes in under a second can't cost more.
+
+## C5. No human text gets the AI label through the new run path
+
+**Target:** 0 of the 10 Gutenberg passages get `guess: "ai"`, in every trial.
+
+**Why this number:** this is criterion 1 from unit 8, re-run through
+`serve.py` and waitress instead of `python app.py`. Nothing in the extension
+should change a decision, so anything above zero means the run path or the
+instrumentation broke the detector. It's the false accusation this whole
+project exists to avoid, so the target stays at zero.
