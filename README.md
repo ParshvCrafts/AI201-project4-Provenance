@@ -1290,7 +1290,7 @@ than four seconds of CPU, which means torch is spreading one small GPT-2
 forward pass across about eight cores at once. That's what criterion C4 is
 about.
 
-### Run Log — Before
+### Run Log: Before
 
 `python ops_eval.py --label before`, 2026-11-13, three fresh `serve.py`
 processes. Full report: `results/ops_2026-11-13_2249_before.md` and `.json`.
@@ -1420,7 +1420,7 @@ I'm not making C4 pass by lowering `DETECTOR_MAX_TOKENS` or swapping the
 model, because both change signal one's scores, and my scope says this unit
 doesn't change decisions.
 
-### Run Log — After
+### Run Log: After
 
 `python ops_eval.py --label after`, same 28 requests, three fresh processes.
 Full report: `results/ops_2026-11-13_2255_after.md` and `.json`.
