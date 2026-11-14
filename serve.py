@@ -46,6 +46,7 @@ def main():
         host=config.HOST,
         port=config.PORT,
         threads=THREADS,
+        torch_threads=config.TORCH_THREADS,
         python=platform.python_version(),
         rate_limiting=config.RATE_LIMITING_ENABLED,
     )

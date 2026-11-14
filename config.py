@@ -46,6 +46,13 @@ DETECTOR_MODEL = os.getenv("AI201_DETECTOR_MODEL", "gpt2")
 # 300 words, which is enough for the signal to mean something.
 DETECTOR_MAX_TOKENS = 400
 
+# Capstone improvement. torch defaults to one thread per physical core (24 on
+# my machine). For one GPT-2 pass over a few hundred tokens that costs about
+# 20% extra CPU for the last bit of speed. bench_threads.py measured it:
+#   threads 24: 530 ms wall, 4,335 CPU-ms    threads 8: 652 ms wall, 3,893 CPU-ms
+# 8 keeps a submission well under a second and stops paying for idle threads.
+TORCH_THREADS = int(os.getenv("AI201_TORCH_THREADS", "8"))
+
 
 # ─── Input limits ────────────────────────────────────────────────────────────
 # Anything outside these gets a 4xx and a `rejected` entry in the audit log.
