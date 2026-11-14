@@ -27,6 +27,8 @@ import detector
 from app import app
 
 THREADS = int(os.getenv("AI201_THREADS", "4"))
+WARMUP_TEXT = ("This sentence is only here to run the model once before the service "
+               "starts taking real submissions, so nobody's first request pays for it. ")
 
 
 def main():
@@ -39,10 +41,18 @@ def main():
         sys.exit(1)
     load_s = round(time.perf_counter() - t0, 2)
 
+    # Second capstone improvement: run the model once before accepting traffic.
+    # Loading isn't enough; the first real forward pass pays one-off setup
+    # costs, and before this a writer's first submission paid them.
+    t1 = time.perf_counter()
+    detector.model_signal(WARMUP_TEXT * 6)  # about 170 tokens, the size of a real submission
+    warmup_s = round(time.perf_counter() - t1, 2)
+
     audit.log_event(
         "startup",
         model=config.DETECTOR_MODEL,
         model_load_s=load_s,
+        warmup_s=warmup_s,
         host=config.HOST,
         port=config.PORT,
         threads=THREADS,
@@ -51,7 +61,7 @@ def main():
         rate_limiting=config.RATE_LIMITING_ENABLED,
     )
     print(f"Provenance Guard on http://{config.HOST}:{config.PORT}  "
-          f"(model loaded in {load_s}s, {THREADS} threads, log: {config.AUDIT_LOG})", flush=True)
+          f"(model loaded in {load_s}s, warm-up {warmup_s}s, {THREADS} threads, log: {config.AUDIT_LOG})", flush=True)
     waitress.serve(app, host=config.HOST, port=config.PORT, threads=THREADS, ident="provenance-guard")
 
 
