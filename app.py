@@ -25,9 +25,11 @@ Routes:
     GET  /health      is the service up, and is the model loaded
 """
 
+import hashlib
+import time
 import uuid
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 
 import audit
 import config
@@ -37,6 +39,54 @@ import stylometry
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_REQUEST_BYTES
+
+
+# ── Instrumentation (capstone) ────────────────────────────────────────────────
+# Every logged request carries the same operational fields, so the log can
+# answer "how long did it take and what did it cost" for failures as well as
+# successes. CPU time is process-wide (torch runs its own threads), so it is
+# only exact when requests don't overlap. ops_eval.py sends them one at a time.
+
+@app.before_request
+def _start_clock():
+    g.request_id = uuid.uuid4().hex[:12]
+    g.t0 = time.perf_counter()
+    g.cpu0 = time.process_time()
+
+
+@app.after_request
+def _tag_response(response):
+    """Hand the request id back so a caller can find its own log line."""
+    if "request_id" in g:
+        response.headers["X-Request-ID"] = g.request_id
+    return response
+
+
+def _ops(http_status: int) -> dict:
+    """The fields every log line gets: who, where, how big, how long, how much CPU."""
+    if "t0" not in g:  # a failure before before_request ran
+        return {"route": request.path, "http_status": http_status}
+    return {
+        "request_id": g.request_id,
+        "route": request.path,
+        "http_status": http_status,
+        "input_bytes": request.content_length or 0,
+        "duration_ms": round((time.perf_counter() - g.t0) * 1000, 1),
+        "cpu_ms": round((time.process_time() - g.cpu0) * 1000, 1),
+    }
+
+
+@app.errorhandler(500)
+def internal_error(exc):
+    """
+    Anything that crashes a route still answers in JSON and leaves a log line.
+    Before this, an unexpected exception gave Flask's HTML 500 and no record.
+    """
+    original = getattr(exc, "original_exception", None) or exc
+    audit.log_rejection(creator_id="unknown", reason="internal_error",
+                        event_detail=type(original).__name__, **_ops(500))
+    return jsonify({"error": "internal_error",
+                    "message": "Something went wrong on our side. Nothing was decided."}), 500
 
 
 def _json_body():
@@ -79,7 +129,7 @@ def _reject(status: int, code: str, message: str, creator_id: str = "unknown", *
     key, so a rejection carrying a made-up id would make the id look real to
     `/appeal`. Use `requested_content_id` instead.
     """
-    audit.log_rejection(creator_id=creator_id, reason=code, **extra)
+    audit.log_rejection(creator_id=creator_id, reason=code, **{**_ops(status), **extra})
     return jsonify({"error": code, "message": message}), status
 
 
@@ -164,6 +214,7 @@ if config.RATE_LIMITING_ENABLED:
             creator_id=payload.get("creator_id", "unknown"),
             reason="rate_limited",
             limit=str(exc.description),
+            **_ops(429),
         )
         return jsonify({
             "error": "rate_limited",
@@ -288,6 +339,7 @@ def submit():
                        f"{config.MAX_CREATOR_ID_CHARS} characters.",
                        creator_for_log, route="submit")
 
+    t_model = time.perf_counter()
     try:
         model_score = detector.model_signal(text)
     except detector.DetectorUnavailable:
@@ -301,9 +353,12 @@ def submit():
                        f"Text needs at least {config.MIN_WORDS} words to be checked.",
                        creator_id, route="submit", word_count=word_count)
 
+    t_style = time.perf_counter()
     style_score = round(stylometry.style_signal(text), 4)
+    t_score = time.perf_counter()
     confidence = round(scoring.combine_signals(model_score, style_score), 4)
     guess, label = scoring.score_to_label(confidence)
+    t_done = time.perf_counter()
     content_id = str(uuid.uuid4())
 
     audit.log_decision(
@@ -316,6 +371,12 @@ def submit():
         label=label,
         status="decided",
         word_count=word_count,
+        input_chars=len(text),
+        input_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
+        model_ms=round((t_style - t_model) * 1000, 1),
+        style_ms=round((t_score - t_style) * 1000, 1),
+        score_ms=round((t_done - t_score) * 1000, 1),
+        **_ops(200),
     )
     return jsonify({
         "content_id": content_id,
@@ -377,7 +438,7 @@ def appeal():
                        "We couldn't find a submission with that id.",
                        route="appeal", requested_content_id=content_id[:100])
 
-    audit.log_appeal(content_id, decision["creator_id"], reasoning)
+    audit.log_appeal(content_id, decision["creator_id"], reasoning, **_ops(200))
     return jsonify({
         "content_id": content_id,
         "status": "under_review",
