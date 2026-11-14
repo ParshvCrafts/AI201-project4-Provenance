@@ -1456,3 +1456,65 @@ threads, and with torch's default each one would ask for 24 cores on a
 32-thread machine. I didn't run the load test, so that's a reason, not a
 result.
 
+### What It Costs (final)
+
+**Measured: 4.07 CPU-seconds and 0.68 s of wall time per scored submission**
+after the fix (mean of the 45 submissions across the three after trials; 5.12
+CPU-s before). Rejected requests cost under 3 ms. Each start costs 22 to 28 s
+of model loading. Memory is about 1 GB once the model has scored something.
+
+**A hundred people a day**, assuming each submits one piece:
+100 submissions x 4.07 CPU-s = 407 CPU-seconds a day, about 6.8 minutes of one
+core. Compute isn't the problem. The cost that decides where this can run is
+memory: about 1 GB held all day whether anyone submits or not, twice the
+512 MB free tier. For 100 people a day I'd be paying for a small always-on
+machine with 2 GB of RAM that sits idle more than 99% of the time.
+
+### What's Still Broken
+
+- **C4 (MISSED, 4.07 CPU-s against a 1 CPU-s target).** To get under a second
+  the model has to do less work: score fewer tokens, use `distilgpt2` (half
+  the layers), or export to ONNX with int8 weights. All three change
+  `model_score`, so each one means redoing the unit 7 calibration and
+  re-running unit 8's criteria and the false-positive attacks. I stopped
+  because that's a detector change, which I put out of scope, and the unit
+  allows one measured improvement.
+- **The first request after a start is the slowest** (962 to 1,454 ms).
+  `serve.py` loads the model but never runs it. One warm-up pass on a fixed
+  sentence at startup would move that cost out of a writer's request. I didn't
+  do it because it would be a second improvement.
+- **`/appeal` gets slower as the log grows.** It reads the whole
+  `audit.jsonl` to find the original decision, 38 to 40 ms now. Fine at this
+  size, not at a year of traffic. An index by `content_id` would fix it.
+- **CPU time is only exact one request at a time.** `cpu_ms` is process-wide,
+  so with overlapping requests each one gets charged for the others. Getting it
+  per request under load would need per-thread accounting, and torch's worker
+  threads make that hard.
+
+**What I'd do next with another unit:** the warm-up pass at startup, first.
+It's the cheapest fix for the one latency number a writer actually feels, and
+the logs already tell me what it should save: the gap between the first
+request and the median, 450 to 780 ms.
+
+### How I Used AI
+
+I used Claude as a coding and writing partner for this unit, the same way I
+did in units 7 and 8.
+
+- **Picking the project and the shape.** I talked through all four of my
+  systems with it and settled on this one and on shape A. I knew from unit 8
+  that GPT-2 was where the time went and that the log had no timing in it.
+- **Code.** It helped me write `serve.py`, the `_ops` fields in `app.py`,
+  `ops_eval.py`, `ops_report.py`, `bench_threads.py`, and the five tests in
+  `tests/test_instrumentation.py`. I read each change and ran the full suite
+  (99 tests) after each step.
+- **Criteria.** I used it to check my five criteria the way the unit
+  suggests: could two people score each one the same way from the sentence
+  alone, and what would make it fail.
+- **Diagnosis.** When C4 missed, my first guess was thread waste. It suggested
+  benchmarking thread counts before changing anything, and that benchmark is
+  what showed my guess was only about 20% right.
+- **What I checked myself.** Every number in this section comes from a log
+  line or a results file in this repo. I ran the clean-clone test, compared
+  decisions before and after the fix, and wrote the misses down as they came
+  out.
