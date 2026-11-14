@@ -26,6 +26,9 @@ gunicorn>=21.2,<24.0
 # where gunicorn does not. `python serve.py` uses it.
 waitress>=3.0,<4.0
 
+# Optional CPU pinning in serve.py (AI201_CPU_CORES). Only imported when set.
+psutil>=5.9,<8.0
+
 # The CA bundle every HTTPS call above verifies against. It arrives as a
 # transitive dependency, so it is pinned forward here to stop a cached older
 # wheel from satisfying this file. Anything before 2026.10.19 still trusts the

@@ -31,7 +31,29 @@ WARMUP_TEXT = ("This sentence is only here to run the model once before the serv
                "starts taking real submissions, so nobody's first request pays for it. ")
 
 
+def pin_cores(spec: str) -> list[int]:
+    """
+    Keep this process (and torch's threads) on the cores in `spec`, e.g. "0-15".
+
+    Third capstone change, opt-in. My laptop's i9-14900HX has 8 fast P-cores
+    (logical CPUs 0-15) and 16 slow E-cores (16-31), and Windows kept putting
+    torch's threads on the E-cores. Off unless AI201_CPU_CORES is set, because
+    which numbers are the fast cores depends on the machine.
+    """
+    import psutil
+
+    cores = []
+    for part in spec.split(","):
+        lo, _, hi = part.strip().partition("-")
+        cores += range(int(lo), int(hi or lo) + 1)
+    psutil.Process().cpu_affinity(cores)
+    return cores
+
+
 def main():
+    cores = os.getenv("AI201_CPU_CORES")
+    if cores:
+        pin_cores(cores)
     t0 = time.perf_counter()
     try:
         detector.warm_up()
@@ -57,6 +79,7 @@ def main():
         port=config.PORT,
         threads=THREADS,
         torch_threads=config.TORCH_THREADS,
+        cpu_cores=cores or "any",
         python=platform.python_version(),
         rate_limiting=config.RATE_LIMITING_ENABLED,
     )

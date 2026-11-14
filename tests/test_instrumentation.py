@@ -70,3 +70,15 @@ class InstrumentationTests(RouteTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PinCoresTests(unittest.TestCase):
+    """serve.py's AI201_CPU_CORES parser: ranges and single cores, comma separated."""
+
+    def test_ranges_and_singles(self):
+        import serve
+        fake = mock.MagicMock()
+        with mock.patch("psutil.Process", return_value=fake):
+            cores = serve.pin_cores("0-3, 8")
+        self.assertEqual(cores, [0, 1, 2, 3, 8])
+        fake.cpu_affinity.assert_called_once_with([0, 1, 2, 3, 8])
