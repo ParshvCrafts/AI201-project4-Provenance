@@ -52,7 +52,7 @@ CPU_MEAN_MAX_MS = 1000
 SHORT = "far too short to judge"
 
 
-def wait_until_ready(proc, timeout=120):
+def wait_until_ready(proc, timeout=300):
     """Seconds from launch until /health says the model is loaded."""
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < timeout:

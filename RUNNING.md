@@ -1,6 +1,68 @@
 # Running Provenance Guard
 
-Everything about how the starter works.
+## Capstone run path (Path B, local with logs)
+
+**The one command:**
+
+```bash
+python serve.py
+```
+
+That loads GPT-2, writes a `startup` line to `logs/audit.jsonl`, and then serves
+on `http://127.0.0.1:5000` through waitress (a production server, no debugger,
+no reloader). It prints `Provenance Guard on http://127.0.0.1:5000 (model
+loaded in ...s ...)` once it's ready. Ctrl+C stops it. `PORT=5055 python
+serve.py` (PowerShell: `$env:PORT=5055; python serve.py`) picks another port.
+
+**From a clean checkout** (what I ran to test this file):
+
+```bash
+git clone https://github.com/ParshvCrafts/AI201-project4-Provenance.git
+cd AI201-project4-Provenance
+python -m venv .venv
+.venv\Scripts\Activate.ps1          # macOS/Linux: source .venv/bin/activate
+pip install -r requirements-lock.txt
+python detector.py                  # first time only: downloads GPT-2 (528 MB)
+python serve.py
+```
+
+Then, from a second terminal in the same folder:
+
+```bash
+curl http://127.0.0.1:5000/health
+python ops_report.py                           # latency, CPU cost, stage breakdown, read from the log
+python ops_eval.py --label check --trials 1    # the capstone criteria, one trial, on port 5055
+```
+
+`ops_eval.py` starts and stops its own `serve.py`, so it doesn't need the first
+terminal.
+
+**What the environment needs:**
+
+| Thing | Value |
+|---|---|
+| Python | 3.11.9 (the starter supports 3.11 to 3.13, not 3.14) |
+| Dependencies | `requirements-lock.txt`, exact versions. The big ones: torch 2.7.1 (CPU build), transformers 4.56.1, Flask 3.0.0, Flask-Limiter 3.12, waitress 3.0.2 |
+| Model files | GPT-2 small from Hugging Face, 528 MB on disk (`model.safetensors` is 523 MB, the tokenizer and config files are the rest), cached in `~/.cache/huggingface/hub/models--gpt2` |
+| Memory | MEMORY_PLACEHOLDER |
+| API keys | none, nothing calls a hosted service |
+| My machine | Windows 11, 24 cores / 32 threads, 32 GB RAM |
+
+**Why not hosted (Path A):** the free tier this course uses gives 512 MB of
+memory. The GPT-2 weights alone are 523 MB on disk and get loaded into RAM to
+score, and torch comes on top of that. The service is over budget before the
+first request, and a free host would also re-download the model after every
+idle spin-down. For a system that carries its own model, local with logs is
+the right path.
+
+**The run record** is `logs/audit.jsonl`, committed. Every request to `/submit`
+or `/appeal` adds one JSON line, failures included, and every start of
+`serve.py` adds a `startup` line. Extracts are in the README under Capstone,
+Instrumentation.
+
+---
+
+Everything below is about how the starter works.
 
 This is a **web service**. It runs on your machine and you talk to it with
 `curl` from another terminal. If you've not built a backend before, that's
