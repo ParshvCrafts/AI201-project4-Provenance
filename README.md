@@ -1289,3 +1289,170 @@ The number that surprised me is the ratio. Half a second of waiting burns more
 than four seconds of CPU, which means torch is spreading one small GPT-2
 forward pass across about eight cores at once. That's what criterion C4 is
 about.
+
+### Run Log — Before
+
+`python ops_eval.py --label before`, 2026-11-13, three fresh `serve.py`
+processes. Full report: `results/ops_2026-11-13_2249_before.md` and `.json`.
+The targets are the ones in `criteria.md`, and they were already coded into
+`ops_eval.py` (commit 5097e72) before the first trial of anything ran.
+
+| Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
+|---|---|---|---|---|---|
+| C1. Ready within 30 s of starting | 3 of 3 | 22.7 s | 23.18 s | 23.2 s | MET |
+| C2. One complete log line per request | 28 of 28, every trial | 28/28 | 28/28 | 28/28 | MET |
+| C3. Scored submissions under 1,000 ms | 14 of 15, every trial | 14/15 | 15/15 | 14/15 | MET |
+| C4. Mean CPU per scored submission | at most 1,000 ms, every trial | 4,917 ms | 4,936 ms | 5,507 ms | MISSED |
+| C5. Human texts labelled AI | 0 of 10, every trial | 0/10 | 0/10 | 0/10 | MET |
+
+Latency breakdown (stretch), mean per scored submission, from the
+`model_ms` / `style_ms` / `score_ms` fields:
+
+| Trial | p50 ms | max ms | GPT-2 ms | style ms | combine + label ms | model load s |
+|---|---|---|---|---|---|---|
+| 1 | 457.9 | 1,036.2 | 524.6 | 1.5 | 0.0 | 22.11 |
+| 2 | 518.1 | 962.1 | 556.3 | 1.6 | 0.0 | 22.25 |
+| 3 | 497.9 | 1,116.1 | 567.8 | 1.5 | 0.0 | 22.61 |
+
+GPT-2 is 99% of every request. The style signal is under 2 ms and scoring
+doesn't register at 0.1 ms resolution. What's left (about 3 ms) is input
+checks and the log write.
+
+#### Real output, trial 1 of the before run
+
+**C1** (`serve.py::main` writes the line, `ops_eval.py::wait_until_ready` times
+it from the client side, 22.7 s):
+
+```json
+{"timestamp": "2026-11-14T06:48:41.278+00:00", "event": "startup", "model": "gpt2", "model_load_s": 22.11, "host": "127.0.0.1", "port": 5055, "threads": 4, "python": "3.11.9", "rate_limiting": true}
+```
+
+**C2** (`app.py::rate_limited` through `app.py::_ops`). The last request of
+the trial, the 429. On the client side it got status 429, `X-Request-ID:
+c59d21202e09` and `error: rate_limited`, and this is the one line with that id:
+
+```json
+{"timestamp": "2026-11-14T06:48:49.794+00:00", "creator_id": "ops-before-t1-224818-flood", "event": "rejected", "status": "rejected", "reason": "rate_limited", "limit": "5 per 1 minute", "request_id": "c59d21202e09", "route": "/submit", "http_status": 429, "input_bytes": 78, "duration_ms": 0.9, "cpu_ms": 0.0}
+```
+
+Status codes in send order: 200 x15, 200 (appeal), 400 400 400 413 413 404,
+400 400 400 400 400 429.
+
+**C3** (`duration_ms` from `app.py::submit`), the 15 scored submissions in
+order:
+
+```
+[1036.2, 412.9, 501.3, 631.6, 660.6, 457.9, 513.9, 427.7, 652.8, 474.0, 421.6, 429.6, 444.0, 435.1, 438.1]
+```
+
+**C4** (`cpu_ms` from `app.py::submit`), same 15:
+
+```
+[9515.6, 3000.0, 4968.8, 4984.4, 7234.4, 4578.1, 4875.0, 3703.1, 6656.2, 4562.5, 4015.6, 4046.9, 4046.9, 3921.9, 3640.6]
+```
+
+**C5** (`guess` from `app.py::submit`), the 10 Gutenberg passages:
+
+```
+['unsure', 'unsure', 'human', 'human', 'human', 'unsure', 'unsure', 'unsure', 'human', 'unsure']
+```
+
+### Verdicts and Diagnoses
+
+- **C1 MET.** 22.7 to 23.2 s. Almost all of it is `from_pretrained` loading
+  GPT-2 (22.1 to 22.6 s of `model_load_s`). Imports and starting waitress take
+  under a second.
+- **C2 MET.** 84 of 84 requests across three trials, each with exactly one
+  complete line and the right status, including all 39 failures.
+- **C3 MET**, but only just in trials 1 and 3. The slow one is always the
+  first scored submission after a start (1,036 ms, 962 ms, 1,116 ms). Every
+  other submission was under 700 ms.
+- **C4 MISSED.** About 5 CPU-seconds per submission against a target of 1.
+- **C5 MET.** 0 of 10 in every trial, and the guesses match unit 8's.
+
+**Diagnosis of C4.** The stage is signal one, the GPT-2 forward pass inside
+`detector.py::perplexity`. It's 99% of the wall time and nearly all of the
+CPU. My criterion assumed the gap between CPU and wall time (about 8 to 1) was
+mostly waste: torch's default of one thread per physical core, 24 here, all
+working on a pass that's too small to split that many ways. Before changing
+anything I tested that with `bench_threads.py`, which scores the same 15 texts
+at different thread counts:
+
+```
+torch default threads: 24
+threads  mean wall ms  max wall ms  mean CPU ms  CPU/wall
+      1        3654.3       5837.5       3597.9       1.0
+      2        1958.7       3065.7       3706.2       1.9
+      4        1056.4       1580.9       3708.3       3.5
+      8         651.9        959.8       3892.7       6.0
+     24         529.5        719.7       4335.4       8.2
+```
+
+So I was half right. On one thread a submission still costs 3.6 CPU-seconds.
+That's real work: a 124M-parameter model reading a couple of hundred tokens
+and scoring each one against a 50,257-token vocabulary. The thread overhead
+is real too, but it's the top 20% (3,598 to 4,335 CPU-ms), not most of it.
+The mechanism behind the miss is that the cost scales with model size times
+token count, and I set the target as if it scaled with wall time. No thread
+setting gets this model under one CPU-second at a 400-token cap.
+
+**The pattern.** Every number here that moves at all moves because of GPT-2.
+The cold start is the model load, the slow first request is the first pass
+through the model, and the CPU cost is the model's compute. The service around
+it (routing, checks, logging, rate limiting) never shows up above 3 ms. It's
+one stage with three symptoms.
+
+**Targets I set too low.** C2 and C5 were never in danger, and C1 had 7
+seconds of slack. I'd tighten C1 to 25 seconds, since 22 to 23 was steady
+across six starts on a warm disk (the clean-clone venv took 67 s, which is a
+fair reason not to go lower than that).
+
+### The Improvement
+
+One change, aimed at the part of the C4 diagnosis I can control: cap torch at
+8 threads (`config.py::TORCH_THREADS`, applied in `detector.py::_load` with
+`torch.set_num_threads`, and logged at startup as `torch_threads`). I picked 8
+from the benchmark because it's the smallest count that still kept the
+slowest of the 15 texts under a second (959.8 ms). 4 threads would cut CPU a
+little more, but the average goes past a second, which trades C4 for C3.
+
+I'm not making C4 pass by lowering `DETECTOR_MAX_TOKENS` or swapping the
+model, because both change signal one's scores, and my scope says this unit
+doesn't change decisions.
+
+### Run Log — After
+
+`python ops_eval.py --label after`, same 28 requests, three fresh processes.
+Full report: `results/ops_2026-11-13_2255_after.md` and `.json`.
+
+| Criterion | Target | Before (runs 1 / 2 / 3) | After (runs 1 / 2 / 3) | Before | After |
+|---|---|---|---|---|---|
+| C1. Ready within 30 s | 3 of 3 | 22.7 / 23.18 / 23.2 s | 27.63 / 23.17 / 22.69 s | MET | MET |
+| C2. One complete log line per request | 28 of 28 | 28 / 28 / 28 | 28 / 28 / 28 | MET | MET |
+| C3. Scored submissions under 1,000 ms | 14 of 15 | 14 / 15 / 14 | 14 / 15 / 15 | MET | MET |
+| C4. Mean CPU per scored submission | at most 1,000 ms | 4,917 / 4,936 / 5,507 ms | 4,194 / 4,036 / 3,976 ms | MISSED | MISSED |
+| C5. Human texts labelled AI | 0 of 10 | 0 / 0 / 0 | 0 / 0 / 0 | MET | MET |
+
+| Latency breakdown | p50 ms (3 trials) | max ms (3 trials) | GPT-2 mean ms | style mean ms |
+|---|---|---|---|---|
+| Before, 24 threads | 457.9 / 518.1 / 497.9 | 1,036.2 / 962.1 / 1,116.1 | 549.6 | 1.5 |
+| After, 8 threads | 675.4 / 706.6 / 665.7 | 1,454.0 / 969.8 / 983.5 | 732.9 | 1.5 |
+
+**Did it help?** Partly, and it cost something. Mean CPU per submission went
+from 5,120 ms to 4,069 ms across the three trials, about 21% less, a bit more
+than the benchmark predicted. C4 is still missed by four times, which the
+diagnosis said it would be. The price is wall time: the median submission went
+from 491 ms to 683 ms (+39%). C3 still holds but with less room. The first
+request in after-trial 1 took 1,454 ms, the rest of that trial stayed under a
+second, so the one slow request I allowed for got used.
+
+I checked that the change didn't move any decision. All 15 guesses are the
+same in all six trials, and the combined scores match the before run to four
+decimals.
+
+Is the trade worth it? On this machine, for one writer at a time, barely. Its
+real value would be with several writers at once: waitress runs 4 request
+threads, and with torch's default each one would ask for 24 cores on a
+32-thread machine. I didn't run the load test, so that's a reason, not a
+result.
+
