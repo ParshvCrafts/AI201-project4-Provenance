@@ -14,6 +14,13 @@ no reloader). It prints `Provenance Guard on http://127.0.0.1:5000 (model
 loaded in ...s ...)` once it's ready. Ctrl+C stops it. `PORT=5055 python
 serve.py` (PowerShell: `$env:PORT=5055; python serve.py`) picks another port.
 
+**Optional, on a CPU with fast and slow cores:** `AI201_CPU_CORES=0-15 python
+serve.py` (PowerShell: `$env:AI201_CPU_CORES="0-15"; python serve.py`) keeps
+the service on those cores. On my i9-14900HX, 0-15 are the fast P-cores, and
+this cut CPU per submission from 4.07 s to 1.34 s (README, Further
+Improvements). Leave it unset on any other machine unless you know which
+numbers its fast cores have.
+
 **From a clean checkout** (what I ran to test this file: I cloned the repo into an empty folder, made a new venv, installed from the lock file and ran `ops_eval.py --label clonecheck --trials 1`. It worked, 28 of 28 requests logged. The one thing that bit me earlier was that the model can take over a minute to load on a fresh venv, 67 s that time, so my first readiness timeout of 120 s was too tight once and I raised it to 300 s):
 
 ```bash
@@ -30,6 +37,7 @@ Then, from a second terminal in the same folder:
 
 ```bash
 curl http://127.0.0.1:5000/health
+python demo.py                                 # AI text, human text, bad input, appeal, with each log line
 python ops_report.py                           # latency, CPU cost, stage breakdown, read from the log
 python ops_eval.py --label check --trials 1    # the capstone criteria, one trial, on port 5055
 ```

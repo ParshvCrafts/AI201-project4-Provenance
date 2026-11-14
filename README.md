@@ -1,5 +1,11 @@
 # Provenance Guard
 
+> **Capstone (unit 9) graders:** the capstone write-up is the
+> [Capstone](#capstone) section at the bottom of this file. Criteria are at
+> the end of [criteria.md](criteria.md), and the run path is at the top of
+> [RUNNING.md](RUNNING.md). Quick look: `python serve.py` in one terminal,
+> `python demo.py` in another, then `python ops_report.py`.
+
 > ### 👋 Start here
 >
 > **New to this repo? Read [RUNNING.md](RUNNING.md) first.**
@@ -1197,6 +1203,14 @@ timers are part of the instrumentation anyway, so it costs me a few lines in
 the report. I'm skipping the load test, the second improvement and the second
 run path.
 
+**Added after the main run (stretch):** a **second measured improvement**. Once
+the first fix was in and written up, I still had time, so I did the next step
+I'd named (a warm-up pass at startup) and ran it the same way, three trials.
+While reading that run I found the real cause behind most of the C4 miss
+(Windows putting torch on the slow cores), so I measured one more change for
+that too. Both are under Further Improvements below, after the first
+before/after pair, which I left as it was.
+
 ### Instrumentation
 
 Every request to `/submit` and `/appeal` writes one JSON line to
@@ -1456,33 +1470,122 @@ threads, and with torch's default each one would ask for 24 cores on a
 32-thread machine. I didn't run the load test, so that's a reason, not a
 result.
 
+### Further Improvements (stretch)
+
+#### Improvement 2: one warm-up pass at startup
+
+The before and after runs both showed the first scored submission after a
+start taking about twice the median (962 to 1,454 ms against 450 to 690 ms).
+Loading the model isn't the same as running it: the first forward pass sets
+things up that later passes reuse. So `serve.py::main` now scores one fixed
+paragraph (about 170 tokens) before it starts serving, and logs `warmup_s`.
+
+`python ops_eval.py --label after2_warmup`, three trials
+(`results/ops_2026-11-13_2332_after2_warmup.md`):
+
+| Trial | First scored request | Median of the other 14 | Mean CPU |
+|---|---|---|---|
+| Before (24 threads), trials 1 / 2 / 3 | 1,036 / 962 / 1,116 ms | 451 / 512 / 494 ms | 4,917 / 4,936 / 5,507 ms |
+| After fix 1 (8 threads) | 1,454 / 970 / 959 ms | 668 / 689 / 662 ms | 4,194 / 4,036 / 3,976 ms |
+| After warm-up | **162 / 563 / 699 ms** | 167 / 651 / 678 ms | 850 / 4,119 / 3,903 ms |
+
+**It worked for what it was aimed at.** The first writer now waits about as
+long as everyone else, and the warm-up itself costs about 0.6 s at startup.
+All five verdicts are the same as before (C4 still MISSED).
+
+But trial 1 was strange: the median dropped to 167 ms and CPU to 850 ms,
+four times better than trials 2 and 3, with no code change in between. A
+warm-up can't do that to fourteen requests that come after it, so something
+else changed.
+
+#### What trial 1 showed: the slow cores
+
+My laptop's CPU is an i9-14900HX: 8 fast performance cores (logical CPUs 0 to
+15, with hyperthreading) and 16 slower efficiency cores (16 to 31). Windows
+decides which ones a process runs on. I pinned the same benchmark to each
+group in turn (8 torch threads, the same 15 texts), twice:
+
+```
+P-cores (0-15)   wall    278 ms  CPU   1316 ms
+E-cores (16-31)  wall    677 ms  CPU   3768 ms
+any core         wall    694 ms  CPU   4004 ms
+P-cores (0-15)   wall    288 ms  CPU   1405 ms
+E-cores (16-31)  wall    732 ms  CPU   3876 ms
+any core         wall    772 ms  CPU   3938 ms
+```
+
+"Any core" runs at E-core speed, so left alone, Windows was putting torch's
+threads on the slow cores almost every time. Trial 1 of the warm-up run looks
+like the rare start where it didn't. **This changes my C4 diagnosis.** The
+3.6 CPU-seconds I measured on one thread was mostly an E-core number. The
+model's work is real, but on a P-core it's about a third of that. The stage
+is still GPT-2. The mechanism was the scheduler, not just the model.
+
+#### Improvement 3: keep torch on the fast cores
+
+`serve.py::pin_cores` sets the process's CPU affinity from an environment
+variable, `AI201_CPU_CORES=0-15`, before the model loads, and torch's threads
+inherit it. It's off unless set, because which cores are fast depends on the
+machine, and it's logged on startup as `cpu_cores`. `psutil` does the pinning
+(added to both requirements files).
+
+`AI201_CPU_CORES=0-15 python ops_eval.py --label after3_pcores`
+(`results/ops_2026-11-13_2335_after3_pcores.md`):
+
+| Criterion | Target | Before | After fix 1 | After warm-up | After pinning (runs 1 / 2 / 3) | Verdict now |
+|---|---|---|---|---|---|---|
+| C1. Ready within 30 s | 3 of 3 | 22.7 / 23.2 / 23.2 s | 27.6 / 23.2 / 22.7 s | 8.9 / 8.9 / 24.4 s | 14.3 / 13.4 / 13.8 s | MET |
+| C2. One log line per request | 28 of 28 | all 28 | all 28 | all 28 | 28 / 28 / 28 | MET |
+| C3. Under 1,000 ms | 14 of 15 | 14 / 15 / 14 | 14 / 15 / 15 | 15 / 14 / 15 | 15 / 15 / 15 | MET |
+| C4. Mean CPU per submission | at most 1,000 ms | 4,917 / 4,936 / 5,507 | 4,194 / 4,036 / 3,976 | 850 / 4,119 / 3,903 | **1,350 / 1,338 / 1,332** | MISSED |
+| C5. Human texts labelled AI | 0 of 10 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | MET |
+
+| Latency breakdown, pinned | p50 ms | max ms | GPT-2 ms | style ms | model load s | warm-up s |
+|---|---|---|---|---|---|---|
+| Trial 1 | 254.0 | 387.8 | 268.1 | 0.9 | 13.06 | 0.56 |
+| Trial 2 | 261.3 | 376.0 | 270.5 | 0.9 | 12.31 | 0.58 |
+| Trial 3 | 261.2 | 393.6 | 271.7 | 0.9 | 12.49 | 0.58 |
+
+**This is the change that actually moved C4.** CPU per submission went from
+5,120 ms (before) to 1,340 ms, 74% less. The median wait went from 491 ms to
+259 ms, and the slowest of 45 requests was 394 ms. It's also the most stable
+run I have: the three trials are within 1.5% of each other, where the unpinned
+runs swung by up to 4x. Model loading got faster too (12 to 13 s against 22).
+C4 is still MISSED, by 34%, but it went from four times over to just over.
+
+The decisions didn't move: all 15 guesses are identical in all twelve trials
+across the four runs.
+
 ### What It Costs (final)
 
-**Measured: 4.07 CPU-seconds and 0.68 s of wall time per scored submission**
-after the fix (mean of the 45 submissions across the three after trials; 5.12
-CPU-s before). Rejected requests cost under 3 ms. Each start costs 22 to 28 s
-of model loading. Memory is about 1 GB once the model has scored something.
+**Measured: 1.34 CPU-seconds and 0.26 s of wall time per scored submission**
+with all three changes and `AI201_CPU_CORES=0-15` (mean of the 45 submissions
+in the pinned run). Without pinning it's 4.07 CPU-s and 0.68 s, and before any
+change it was 5.12 CPU-s and 0.49 s. Rejected requests cost under 3 ms. Each
+start costs 13 to 14 s of model loading plus a 0.6 s warm-up. Memory is about
+1 GB once the model has scored something.
 
 **A hundred people a day**, assuming each submits one piece:
-100 submissions x 4.07 CPU-s = 407 CPU-seconds a day, about 6.8 minutes of one
-core. Compute isn't the problem. The cost that decides where this can run is
+100 submissions x 1.34 CPU-s = 134 CPU-seconds a day, a bit over 2 minutes of
+one core. Compute isn't the problem. The cost that decides where this can run is
 memory: about 1 GB held all day whether anyone submits or not, twice the
 512 MB free tier. For 100 people a day I'd be paying for a small always-on
 machine with 2 GB of RAM that sits idle more than 99% of the time.
 
 ### What's Still Broken
 
-- **C4 (MISSED, 4.07 CPU-s against a 1 CPU-s target).** To get under a second
-  the model has to do less work: score fewer tokens, use `distilgpt2` (half
-  the layers), or export to ONNX with int8 weights. All three change
-  `model_score`, so each one means redoing the unit 7 calibration and
-  re-running unit 8's criteria and the false-positive attacks. I stopped
-  because that's a detector change, which I put out of scope, and the unit
-  allows one measured improvement.
-- **The first request after a start is the slowest** (962 to 1,454 ms).
-  `serve.py` loads the model but never runs it. One warm-up pass on a fixed
-  sentence at startup would move that cost out of a writer's request. I didn't
-  do it because it would be a second improvement.
+- **C4 (MISSED, 1.34 CPU-s against a 1 CPU-s target, pinned).** Two ways
+  left. The cheap one is fewer torch threads on the P-cores (4 instead of 8),
+  which the first benchmark suggests trims CPU at some cost in wall time. The
+  sure one is making the model do less work: fewer tokens, `distilgpt2`, or
+  ONNX with int8 weights. Those change `model_score`, so each one means redoing
+  the unit 7 calibration and re-running unit 8's criteria and attacks. I
+  stopped because I'd already made three measured changes and the detector
+  itself is out of scope.
+- **Pinning is manual and machine-specific.** `AI201_CPU_CORES=0-15` is right
+  for my i9-14900HX. On another machine those numbers could be the slow cores,
+  or not exist. Without it the service still works, at the unpinned numbers.
+  Reading the core types from the OS would fix that, and I didn't get to it.
 - **`/appeal` gets slower as the log grows.** It reads the whole
   `audit.jsonl` to find the original decision, 38 to 40 ms now. Fine at this
   size, not at a year of traffic. An index by `content_id` would fix it.
@@ -1491,10 +1594,11 @@ machine with 2 GB of RAM that sits idle more than 99% of the time.
   per request under load would need per-thread accounting, and torch's worker
   threads make that hard.
 
-**What I'd do next with another unit:** the warm-up pass at startup, first.
-It's the cheapest fix for the one latency number a writer actually feels, and
-the logs already tell me what it should save: the gap between the first
-request and the median, 450 to 780 ms.
+**What I'd do next with another unit:** the load test, first. Every number
+here is one writer at a time, and the pinning result means 4 waitress threads
+now share 8 fast cores. I'd want to see what ten writers at once do to C3
+before anyone relied on these numbers. (The warm-up I named here at first is
+done, under Further Improvements.)
 
 ### How I Used AI
 
@@ -1513,7 +1617,10 @@ did in units 7 and 8.
   alone, and what would make it fail.
 - **Diagnosis.** When C4 missed, my first guess was thread waste. It suggested
   benchmarking thread counts before changing anything, and that benchmark is
-  what showed my guess was only about 20% right.
+  what showed my guess was only about 20% right. Later, when one warm-up
+  trial came out four times faster than the others, I asked it what could
+  explain that without a code change. It pointed at my CPU's mix of fast and
+  slow cores, and the pinned benchmark is how I checked that.
 - **What I checked myself.** Every number in this section comes from a log
   line or a results file in this repo. I ran the clean-clone test, compared
   decisions before and after the fix, and wrote the misses down as they came
