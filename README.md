@@ -1196,3 +1196,96 @@ Only the **latency breakdown** (time per stage of one run, measured). The stage
 timers are part of the instrumentation anyway, so it costs me a few lines in
 the report. I'm skipping the load test, the second improvement and the second
 run path.
+
+### Instrumentation
+
+Every request to `/submit` and `/appeal` writes one JSON line to
+`logs/audit.jsonl`, and so does every start of `serve.py`. The fields I added
+for the capstone (`app.py::_ops`, `app.py::_start_clock`):
+
+| Field | What it is |
+|---|---|
+| `request_id` | 12 hex characters, also sent back in the `X-Request-ID` response header |
+| `route`, `http_status` | where the request went and what it got back |
+| `input_bytes` | size of the request body, so even a rejected request says what came in |
+| `duration_ms` | wall time from the start of the request to the log write |
+| `cpu_ms` | process CPU time over the same span (Windows counts it in 15.6 ms ticks, so small requests show 0.0) |
+| `input_chars`, `input_sha256` | scored submissions only: text length and a fingerprint, so the same text can be found again without storing it twice |
+| `model_ms`, `style_ms`, `score_ms` | scored submissions only: time in GPT-2, the style signal, and combining plus labelling |
+
+The original nine fields (timestamp, content_id, creator_id, guess, the three
+scores, label, status) are unchanged. Timestamps now have milliseconds.
+
+**Extract from a real session** (the smoke run on 2026-11-13, `python
+ops_eval.py --label smoke --trials 1`). I cut the `label` sentence short on the
+scored lines so they fit; everything else is as written.
+
+```json
+{"timestamp": "2026-11-14T06:34:55.357+00:00", "event": "startup", "model": "gpt2", "model_load_s": 23.99, "host": "127.0.0.1", "port": 5055, "threads": 4, "python": "3.11.9", "rate_limiting": true}
+{"timestamp": "2026-11-14T06:34:57.949+00:00", "content_id": "7ad7fc71-806c-4b40-9b71-f2fb265f4c9c", "creator_id": "ops-smoke-t1-223430-h0", "guess": "unsure", "model_score": 0.6081, "style_score": 0.6331, "combined_score": 0.6206, "label": "We can't tell whether this was written b...", "status": "decided", "word_count": 124, "input_chars": 700, "input_sha256": "1c9cf237f4ab61f4", "model_ms": 2031.2, "style_ms": 1.9, "score_ms": 0.0, "request_id": "6e6ae5cddec3", "route": "/submit", "http_status": 200, "input_bytes": 757, "duration_ms": 2036.6, "cpu_ms": 12859.4}
+{"timestamp": "2026-11-14T06:34:58.456+00:00", "content_id": "6fb38532-5712-49f1-990c-7316c9a8518f", "creator_id": "ops-smoke-t1-223430-h1", "guess": "unsure", "model_score": 0.7425, "style_score": 0.4391, "combined_score": 0.5908, "label": "We can't tell whether this was written b...", "status": "decided", "word_count": 118, "input_chars": 611, "input_sha256": "672557c9d09aba7b", "model_ms": 494.3, "style_ms": 1.0, "score_ms": 0.0, "request_id": "551c136313e5", "route": "/submit", "http_status": 200, "input_bytes": 663, "duration_ms": 498.5, "cpu_ms": 3796.9}
+{"timestamp": "2026-11-14T06:34:59.024+00:00", "content_id": "2611ada0-5aa0-4b5a-bbd3-eab95d6fc540", "creator_id": "ops-smoke-t1-223430-h2", "guess": "human", "model_score": 0.3536, "style_score": 0.1626, "combined_score": 0.2581, "label": "This looks like it was written by a pers...", "status": "decided", "word_count": 158, "input_chars": 878, "input_sha256": "d9697917da19b74b", "model_ms": 555.3, "style_ms": 1.6, "score_ms": 0.0, "request_id": "5a39b4db3fe4", "route": "/submit", "http_status": 200, "input_bytes": 930, "duration_ms": 560.0, "cpu_ms": 4359.4}
+{"timestamp": "2026-11-14T06:34:59.752+00:00", "content_id": "278b5642-e73a-474f-ab75-b4cc869b9cd3", "creator_id": "ops-smoke-t1-223430-h3", "guess": "human", "model_score": 0.5308, "style_score": 0.1498, "combined_score": 0.3403, "label": "This looks like it was written by a pers...", "status": "decided", "word_count": 200, "input_chars": 1102, "input_sha256": "e0858b8f39b2bfed", "model_ms": 713.9, "style_ms": 2.1, "score_ms": 0.0, "request_id": "1023cd27abe3", "route": "/submit", "http_status": 200, "input_bytes": 1164, "duration_ms": 719.1, "cpu_ms": 4859.4}
+{"timestamp": "2026-11-14T06:35:01.092+00:00", "content_id": "91475fcc-bc42-4837-85f7-f1123ddada5e", "creator_id": "ops-smoke-t1-223430-h5", "guess": "unsure", "model_score": 0.429, "style_score": 0.7183, "combined_score": 0.5736, "label": "We can't tell whether this was written b...", "status": "decided", "word_count": 145, "input_chars": 841, "input_sha256": "210d654f459d222f", "model_ms": 574.3, "style_ms": 1.5, "score_ms": 0.0, "request_id": "219f6928f553", "route": "/submit", "http_status": 200, "input_bytes": 893, "duration_ms": 578.7, "cpu_ms": 3968.8}
+{"timestamp": "2026-11-14T06:35:05.903+00:00", "content_id": "7ad7fc71-806c-4b40-9b71-f2fb265f4c9c", "creator_id": "ops-smoke-t1-223430-h0", "event": "appeal", "status": "under_review", "reasoning": "I wrote this myself.", "request_id": "d1b30bcc6111", "route": "/appeal", "http_status": 200, "input_bytes": 91, "duration_ms": 40.2, "cpu_ms": 31.2}
+{"timestamp": "2026-11-14T06:35:05.912+00:00", "creator_id": "unknown", "event": "rejected", "status": "rejected", "reason": "invalid_json", "request_id": "009a50ad066f", "route": "submit", "http_status": 400, "input_bytes": 16, "duration_ms": 2.3, "cpu_ms": 0.0}
+{"timestamp": "2026-11-14T06:35:05.939+00:00", "creator_id": "ops-smoke-t1-223430-b3", "event": "rejected", "status": "rejected", "reason": "text_too_long", "request_id": "eaeb8ae2be24", "route": "submit", "http_status": 413, "input_bytes": 20053, "duration_ms": 1.1, "cpu_ms": 0.0, "text_length": 20001}
+{"timestamp": "2026-11-14T06:35:05.986+00:00", "creator_id": "unknown", "event": "rejected", "status": "rejected", "reason": "request_too_large", "request_id": "666e2c45d0cd", "route": "/submit", "http_status": 413, "input_bytes": 1100012, "duration_ms": 0.8, "cpu_ms": 0.0}
+{"timestamp": "2026-11-14T06:35:06.032+00:00", "creator_id": "unknown", "event": "rejected", "status": "rejected", "reason": "not_found", "request_id": "2226aaeddead", "route": "appeal", "http_status": 404, "input_bytes": 84, "duration_ms": 38.2, "cpu_ms": 15.6, "requested_content_id": "00000000-0000-4000-8000-000000000000"}
+{"timestamp": "2026-11-14T06:35:06.088+00:00", "creator_id": "ops-smoke-t1-223430-flood", "event": "rejected", "status": "rejected", "reason": "rate_limited", "limit": "5 per 1 minute", "request_id": "99ee45e5abcc", "route": "/submit", "http_status": 429, "input_bytes": 77, "duration_ms": 0.9, "cpu_ms": 0.0}
+```
+
+The last five lines are failed runs: bad JSON, a text over 20,000 characters,
+a 1.1 MB body, an appeal for an id that was never issued, and a rate-limited
+submission. Each one has a request id, a status and a duration, so a failure
+shows up as a line and not as a gap.
+
+A crash inside a route didn't happen in this session, so it isn't in the
+extract. `tests/test_instrumentation.py::test_a_crash_answers_json_500_and_leaves_a_log_line`
+forces one (GPT-2 raising `RuntimeError`) and checks that the client gets a
+JSON 500 and the log gets a line with `reason: internal_error`,
+`event_detail: RuntimeError` and `http_status: 500`. Before this unit that
+same crash gave Flask's HTML error page and nothing in the log.
+
+Two things I noticed just from reading these lines. The first submission after
+a start took 2,037 ms while the rest took about 500 to 700 ms, so the first
+real request pays a one-off cost that loading the model doesn't cover. And the
+two appeals take about 40 ms when a rejection takes 1 to 3 ms, because
+`/appeal` reads the whole log file to find the original decision. That grows
+with the log.
+
+### What It Costs
+
+There's no API bill. GPT-2 runs on my own CPU, so the real cost of one run is
+compute: CPU-seconds, and how long a writer waits.
+
+**How I measured it:** each scored submission logs `cpu_ms`, the change in
+`time.process_time()` across the request. That counts CPU time on every
+thread in the process, including torch's own worker threads, so it's only
+exact when requests don't overlap, and `ops_eval.py` sends them one at a time.
+I ran the smoke session (15 real submissions) and then `python ops_report.py
+--last 10`, which averages the last ten scored submissions in the log:
+
+```
+Scored submissions: 10  (2026-11-14T06:35:01.092+00:00 to 2026-11-14T06:35:05.855+00:00)
+  wall ms   mean   526.9  p50   500.8  p95   676.4  max   676.4
+  CPU ms    mean  4300.0  p50  3968.8  p95  5765.6  max  5765.6
+  CPU / wall: 8.2 cores busy on average
+
+Where the time goes (mean ms per scored submission):
+  GPT-2 (signal one)     522.6  (99.2%)
+  style (signal two)       1.4  ( 0.3%)
+  combine + label          0.0  ( 0.0%)
+  validation + log         2.9  ( 0.5%)
+```
+
+**Measured cost of one run, before any changes: 4.3 CPU-seconds and 0.53
+seconds of wall time.** Rejected requests cost close to nothing (0.8 to 3 ms,
+under one 15.6 ms CPU tick). Starting the service costs a one-off 24 to 67
+seconds of model loading, and the process holds about 1 GB of memory once it
+has scored something.
+
+The number that surprised me is the ratio. Half a second of waiting burns more
+than four seconds of CPU, which means torch is spreading one small GPT-2
+forward pass across about eight cores at once. That's what criterion C4 is
+about.

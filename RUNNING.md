@@ -14,7 +14,7 @@ no reloader). It prints `Provenance Guard on http://127.0.0.1:5000 (model
 loaded in ...s ...)` once it's ready. Ctrl+C stops it. `PORT=5055 python
 serve.py` (PowerShell: `$env:PORT=5055; python serve.py`) picks another port.
 
-**From a clean checkout** (what I ran to test this file):
+**From a clean checkout** (what I ran to test this file: I cloned the repo into an empty folder, made a new venv, installed from the lock file and ran `ops_eval.py --label clonecheck --trials 1`. It worked, 28 of 28 requests logged. The one thing that bit me earlier was that the model can take over a minute to load on a fresh venv, 67 s that time, so my first readiness timeout of 120 s was too tight once and I raised it to 300 s):
 
 ```bash
 git clone https://github.com/ParshvCrafts/AI201-project4-Provenance.git
@@ -44,7 +44,7 @@ terminal.
 | Python | 3.11.9 (the starter supports 3.11 to 3.13, not 3.14) |
 | Dependencies | `requirements-lock.txt`, exact versions. The big ones: torch 2.7.1 (CPU build), transformers 4.56.1, Flask 3.0.0, Flask-Limiter 3.12, waitress 3.0.2 |
 | Model files | GPT-2 small from Hugging Face, 528 MB on disk (`model.safetensors` is 523 MB, the tokenizer and config files are the rest), cached in `~/.cache/huggingface/hub/models--gpt2` |
-| Memory | MEMORY_PLACEHOLDER |
+| Memory | 460 MB resident right after the model loads, 1,037 MB after the first few scored submissions (measured with psutil on the running `serve.py`) |
 | API keys | none, nothing calls a hosted service |
 | My machine | Windows 11, 24 cores / 32 threads, 32 GB RAM |
 
